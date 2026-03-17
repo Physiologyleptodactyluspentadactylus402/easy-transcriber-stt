@@ -55,12 +55,19 @@ class Qwen3ASRProvider(BaseProvider):
         self,
         progress_callback: Callable[[float, str], None] | None = None,
     ) -> None:
+        global pipeline, torch
         if progress_callback:
             progress_callback(0.0, "Installing transformers and torch…")
         subprocess.check_call([
             sys.executable, "-m", "pip", "install",
             "transformers", "torch", "torchaudio",
         ])
+        # Re-import after install so is_available() returns True
+        # without requiring a server restart
+        from transformers import pipeline as _pipeline
+        import torch as _torch
+        pipeline = _pipeline
+        torch = _torch
         if progress_callback:
             progress_callback(1.0, "Dependencies installed.")
 

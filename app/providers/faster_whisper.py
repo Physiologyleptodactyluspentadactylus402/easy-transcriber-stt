@@ -71,9 +71,14 @@ class FasterWhisperProvider(BaseProvider):
         self,
         progress_callback: Callable[[float, str], None] | None = None,
     ) -> None:
+        global WhisperModel
         if progress_callback:
             progress_callback(0.0, "Installing faster-whisper…")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "faster-whisper"])
+        # Re-import after install so is_available() returns True
+        # without requiring a server restart
+        from faster_whisper import WhisperModel as _WM
+        WhisperModel = _WM
         if progress_callback:
             progress_callback(1.0, "faster-whisper installed.")
 
