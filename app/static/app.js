@@ -1,18 +1,8 @@
-// Global locale (injected by Jinja2 as window.APP_LANGUAGE)
-let _locale = {};
-
-async function loadLocale() {
-  const lang = window.APP_LANGUAGE || 'en';
-  const r = await fetch(`/api/locale?lang=${lang}`);
-  _locale = await r.json();
-}
-
-function t(key) {
-  return _locale[key] || key;
-}
-
 function app() {
   return {
+    // Locale (reactive — must be inside component for Alpine to track changes)
+    _locale: {},
+
     // Navigation
     currentSection: 'transcribe',
 
@@ -65,7 +55,9 @@ function app() {
     _ws: null,
 
     async init() {
-      await loadLocale();
+      const lang = window.APP_LANGUAGE || 'en';
+      const r = await fetch(`/api/locale?lang=${lang}`);
+      this._locale = await r.json();
       await this.loadProviders();
       await this.loadSettings();
       await this.loadHistory();
@@ -441,6 +433,8 @@ function app() {
       return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     },
 
-    t,
+    t(key) {
+      return this._locale[key] || key;
+    },
   };
 }
