@@ -30,6 +30,8 @@ def create_app(
     settings = Settings(settings_path)
     history = History(db_path or settings.db_path)
     queue = JobQueue()
+    from app.core.live import LiveSessionManager
+    _live_sessions = LiveSessionManager()
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
     def _get_providers() -> dict[str, object]:
@@ -130,6 +132,11 @@ def create_app(
         )
         return {"ok": True}
 
+    @app.get("/api/ffmpeg")
+    async def check_ffmpeg():
+        import shutil
+        return {"available": shutil.which("ffmpeg") is not None}
+
     @app.get("/api/download")
     async def download_file(path: str):
         from fastapi import HTTPException
@@ -223,19 +230,72 @@ def create_app(
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
+        import base64
+        import uuid
         await ws.accept()
-        await _ws_manager.connect(ws)   # register globally
+        await _ws_manager.connect(ws)
         job_id = None
+        live_session_id = None
         try:
             while True:
                 data = await ws.receive_json()
-                if data.get("type") == "subscribe":
+                msg_type = data.get("type")
+
+                if msg_type == "subscribe":
                     job_id = data["job_id"]
-                    _ws_manager.subscribe(ws, job_id)   # subscribe to job updates
-                elif data.get("type") == "cancel" and job_id:
+                    _ws_manager.subscribe(ws, job_id)
+
+                elif msg_type == "cancel" and job_id:
                     queue.cancel(job_id)
+
+                elif msg_type == "start_live":
+                    live_session_id = str(uuid.uuid4())
+                    opts_raw = data.get("opts", {})
+                    opts = TranscribeOptions(
+                        language=opts_raw.get("language"),
+                        prompt=opts_raw.get("prompt", ""),
+                        speaker_labels=bool(opts_raw.get("speaker_labels", False)),
+                        output_formats=opts_raw.get("output_formats", ["txt"]),
+                        chunk_size_sec=settings.chunk_size_sec,
+                        model_id=data.get("model_id", "tiny"),
+                    )
+                    provider = _get_providers().get(data.get("provider_name", "faster_whisper"))
+                    out_dir = settings.resolve_output_dir()
+                    from app.core.live import LiveSession
+                    session = LiveSession(live_session_id, provider, opts, out_dir)
+                    _live_sessions.add(session)
+                    await session.start(_ws_manager)
+                    await ws.send_json({
+                        "type": "live_session_started",
+                        "session_id": live_session_id,
+                    })
+
+                elif msg_type == "audio_chunk":
+                    sid = data.get("session_id")
+                    session = _live_sessions.get(sid) if sid else None
+                    if session:
+                        raw = base64.b64decode(data.get("data", ""))
+                        session.add_chunk(raw)
+
+                elif msg_type == "stop_live":
+                    sid = data.get("session_id")
+                    session = _live_sessions.get(sid) if sid else None
+                    if session:
+                        output_files = await session.stop(_ws_manager)
+                        _live_sessions.remove(sid)
+                        await ws.send_json({
+                            "type": "live_session_stopped",
+                            "session_id": sid,
+                            "output_files": [str(p) for p in output_files],
+                        })
+
         except WebSocketDisconnect:
             _ws_manager.disconnect(ws, job_id)
+            if live_session_id:
+                session = _live_sessions.get(live_session_id)
+                if session:
+                    await session.stop(_ws_manager)
+                    _live_sessions.remove(live_session_id)
 
     return app
 

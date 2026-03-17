@@ -106,3 +106,51 @@ def test_ws_global_connection_tracked(tmp_path):
         # Send a non-subscribe message — server should handle without crashing
         ws.send_json({"type": "ping"})
         # No response expected, just verify no exception and connection stays open
+
+
+def test_ffmpeg_endpoint_returns_bool(client):
+    r = client.get("/api/ffmpeg")
+    assert r.status_code == 200
+    data = r.json()
+    assert "available" in data
+    assert isinstance(data["available"], bool)
+
+
+def test_websocket_start_live_responds_with_session_started(tmp_path):
+    from app.main import create_app
+    app = create_app(settings_path=tmp_path / "s.json", db_path=tmp_path / "db.db")
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({
+            "type": "start_live",
+            "provider_name": "faster_whisper",
+            "model_id": "tiny",
+            "opts": {"language": None, "speaker_labels": False, "output_formats": ["txt"]},
+        })
+        msg = ws.receive_json()
+        assert msg["type"] == "live_session_started"
+        assert "session_id" in msg
+
+
+def test_websocket_stop_live_responds_with_session_stopped(tmp_path):
+    from app.main import create_app
+    app = create_app(settings_path=tmp_path / "s.json", db_path=tmp_path / "db.db")
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({
+            "type": "start_live",
+            "provider_name": "faster_whisper",
+            "model_id": "tiny",
+            "opts": {},
+        })
+        start_msg = ws.receive_json()
+        session_id = start_msg["session_id"]
+
+        ws.send_json({"type": "stop_live", "session_id": session_id})
+        stop_msg = ws.receive_json()
+        assert stop_msg["type"] == "live_session_stopped"
+        assert stop_msg["session_id"] == session_id
