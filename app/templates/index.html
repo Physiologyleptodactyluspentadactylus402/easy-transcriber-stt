@@ -10,14 +10,292 @@
     window.APP_LANGUAGE = "{{ language }}";
     window.APP_WIZARD_COMPLETE = {{ wizard_complete | lower }};
   </script>
+  <style>
+    [x-cloak] { display: none !important; }
+    .sidebar-icon { @apply w-10 h-9 rounded-lg flex items-center justify-center text-lg transition-colors; }
+    .sidebar-icon.active { @apply bg-gray-800; }
+    .sidebar-icon:not(.active) { @apply text-gray-500 hover:text-gray-300 hover:bg-gray-900 cursor-pointer; }
+  </style>
 </head>
-<body class="bg-gray-950 text-gray-100 min-h-screen" x-data="app()" x-init="init()">
-  <div id="app-root">
-    <!-- Full UI injected by Alpine.js — see static/app.js -->
-    <div class="flex items-center justify-center min-h-screen">
-      <p class="text-gray-500">Loading...</p>
+<body class="bg-gray-950 text-gray-100 min-h-screen font-sans" x-data="app()" x-init="init()" x-cloak>
+
+  <!-- First-run Wizard Modal -->
+  <div x-show="showWizard" class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl p-8 max-w-md w-full shadow-2xl">
+      <h2 class="text-xl font-bold mb-2" x-text="t('wizard_title')"></h2>
+      <p class="text-gray-400 text-sm mb-6" x-text="t('wizard_setup_type')"></p>
+      <div class="space-y-3">
+        <button @click="completeWizard('openai')"
+                class="w-full text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">
+          🟢 <span x-text="t('wizard_openai')"></span>
+        </button>
+        <button @click="completeWizard('elevenlabs')"
+                class="w-full text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">
+          💜 <span x-text="t('wizard_elevenlabs')"></span>
+        </button>
+        <button @click="completeWizard('local')"
+                class="w-full text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">
+          ⚡ <span x-text="t('wizard_local')"></span>
+        </button>
+        <button @click="completeWizard('later')"
+                class="w-full text-left px-4 py-3 text-gray-500 hover:text-gray-300 text-sm transition-colors">
+          <span x-text="t('wizard_decide_later')"></span>
+        </button>
+      </div>
     </div>
   </div>
+
+  <!-- Main Layout -->
+  <div class="flex h-screen overflow-hidden">
+
+    <!-- Sidebar -->
+    <div class="w-14 bg-gray-1000 border-r border-gray-800 flex flex-col items-center py-4 gap-1 flex-shrink-0" style="background:#010409">
+      <!-- Logo -->
+      <div class="w-9 h-9 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center text-lg mb-4">🎙</div>
+
+      <button @click="currentSection='transcribe'"
+              :class="currentSection==='transcribe' ? 'active' : ''"
+              class="sidebar-icon" title="Transcribe">📂</button>
+      <button @click="currentSection='history'"
+              :class="currentSection==='history' ? 'active' : ''"
+              class="sidebar-icon" title="History">📋</button>
+
+      <div class="flex-1"></div>
+
+      <button @click="currentSection='settings'"
+              :class="currentSection==='settings' ? 'active' : ''"
+              class="sidebar-icon" title="Settings">⚙️</button>
+      <button @click="saveSettings({language: settings.language==='en'?'it':'en'})"
+              class="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center text-xs text-gray-400 hover:text-white hover:bg-gray-700 transition-colors cursor-pointer"
+              x-text="settings.language?.toUpperCase() || 'EN'"></button>
+    </div>
+
+    <!-- Main Panel -->
+    <div class="flex-1 flex flex-col overflow-hidden">
+
+      <!-- TRANSCRIBE SECTION -->
+      <div x-show="currentSection==='transcribe'" class="flex flex-col h-full">
+        <!-- Header -->
+        <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between flex-shrink-0">
+          <div>
+            <div class="font-semibold text-sm" x-text="t('nav_transcribe')"></div>
+            <div class="text-xs text-gray-500" x-text="`${files.length} file(s) in queue`"></div>
+          </div>
+          <div class="flex gap-2">
+            <!-- Provider selector -->
+            <select x-model="selectedProvider"
+                    @change="selectedModel = selectedProvider?.models[0] || null"
+                    class="bg-gray-800 border border-gray-700 text-xs rounded-md px-2 py-1 text-gray-300">
+              <template x-for="p in providers" :key="p.name">
+                <option :value="p" :disabled="!p.available" x-text="p.name"></option>
+              </template>
+            </select>
+            <!-- Model selector -->
+            <select x-model="selectedModel"
+                    class="bg-gray-800 border border-gray-700 text-xs rounded-md px-2 py-1 text-gray-300">
+              <template x-for="m in (selectedProvider?.models || [])" :key="m.id">
+                <option :value="m" x-text="m.name"></option>
+              </template>
+            </select>
+          </div>
+        </div>
+
+        <!-- Drop zone -->
+        <div class="mx-4 mt-3 border-2 border-dashed border-gray-700 rounded-xl p-6 text-center flex-shrink-0
+                    hover:border-indigo-500 transition-colors cursor-pointer"
+             @dragover.prevent
+             @drop="handleDrop($event)"
+             @click="$refs.fileInput.click()">
+          <div class="text-2xl mb-1">📁</div>
+          <div class="text-sm text-gray-400">
+            <span x-text="t('transcribe_drop_prompt')"></span>
+            <span class="text-indigo-400 underline cursor-pointer" x-text="t('transcribe_drop_browse')"></span>
+          </div>
+          <div class="text-xs text-gray-600 mt-1" x-text="t('transcribe_drop_formats')"></div>
+          <input type="file" class="hidden" x-ref="fileInput"
+                 accept=".mp3,.m4a,.wav,.ogg,.flac,.webm" multiple
+                 @change="handleFileInput($event)">
+        </div>
+
+        <!-- Output format toggles -->
+        <div class="mx-4 mt-2 flex gap-2 flex-wrap flex-shrink-0">
+          <template x-for="fmt in ['txt','srt','vtt','md']" :key="fmt">
+            <button @click="toggleFormat(fmt)"
+                    :class="outputFormats.includes(fmt)
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-gray-800 text-gray-400 hover:text-gray-200'"
+                    class="px-3 py-1 rounded-md text-xs font-mono transition-colors"
+                    x-text="fmt.toUpperCase()"></button>
+          </template>
+          <!-- Speaker labels (if supported) -->
+          <button x-show="selectedModel?.supports_speaker_labels"
+                  @click="speakerLabels = !speakerLabels"
+                  :class="speakerLabels ? 'bg-purple-700 text-white' : 'bg-gray-800 text-gray-400'"
+                  class="px-3 py-1 rounded-md text-xs transition-colors">
+            👥 Speakers
+          </button>
+        </div>
+
+        <!-- Prompt input (ElevenLabs Scribe v2 only) -->
+        <div x-show="selectedModel?.id === 'scribe_v2'" class="mx-4 mt-2 flex-shrink-0">
+          <input x-model="prompt" type="text"
+                 placeholder="Keyterms (comma-separated, e.g. ATP, mitosis)"
+                 class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-xs text-gray-300 placeholder-gray-600">
+        </div>
+
+        <!-- Queue list -->
+        <div class="flex-1 overflow-y-auto px-4 mt-3 space-y-2">
+          <template x-for="(item, idx) in files" :key="item.name + idx">
+            <div class="bg-gray-900 border rounded-lg px-3 py-2"
+                 :class="item.status==='error' ? 'border-red-800' : 'border-gray-800'">
+              <div class="flex items-center justify-between mb-1">
+                <div class="text-sm font-medium truncate max-w-xs" x-text="item.name"></div>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs"
+                        :class="{
+                          'text-indigo-400': item.status==='running',
+                          'text-green-400': item.status==='done',
+                          'text-red-400': item.status==='error',
+                          'text-gray-500': item.status==='pending'
+                        }"
+                        x-text="item.status==='running' ? Math.round(item.progress)+'%' : item.status"></span>
+                  <button x-show="item.status==='pending'" @click="removeFile(idx)"
+                          class="text-gray-600 hover:text-red-400 text-xs">✕</button>
+                </div>
+              </div>
+              <div x-show="item.status==='running'" class="bg-gray-800 rounded h-1">
+                <div class="bg-indigo-500 h-1 rounded transition-all"
+                     :style="`width: ${item.progress}%`"></div>
+              </div>
+              <div x-show="item.status==='error'" class="text-xs text-red-400 mt-1" x-text="item.error"></div>
+              <div x-show="item.status==='done'" class="mt-1 flex gap-2 flex-wrap">
+                <template x-for="path in item.outputFiles" :key="path">
+                  <a :href="`/api/download?path=${encodeURIComponent(path)}`"
+                     class="text-xs text-indigo-400 hover:underline"
+                     x-text="path.split(/[\\/]/).pop()"></a>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- Bottom action bar -->
+        <div class="px-4 py-3 border-t border-gray-800 flex items-center gap-3 flex-shrink-0">
+          <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer flex-1">
+            <div @click="mergeOutput = !mergeOutput"
+                 :class="mergeOutput ? 'bg-indigo-600' : 'bg-gray-700'"
+                 class="w-8 h-4 rounded-full relative transition-colors cursor-pointer">
+              <div :class="mergeOutput ? 'translate-x-4' : 'translate-x-0.5'"
+                   class="absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform"></div>
+            </div>
+            <span x-text="t('transcribe_merge')"></span>
+          </label>
+          <button x-show="isRunning" @click="stopQueue()"
+                  class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs transition-colors">
+            ⏹ <span x-text="t('transcribe_stop')"></span>
+          </button>
+          <button @click="startQueue()" :disabled="!files.length || isRunning"
+                  class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40
+                         disabled:cursor-not-allowed rounded-lg text-xs font-semibold transition-colors">
+            ▶ <span x-text="t('transcribe_start')"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- HISTORY SECTION -->
+      <div x-show="currentSection==='history'" class="flex flex-col h-full">
+        <div class="px-4 py-3 border-b border-gray-800 flex-shrink-0">
+          <div class="font-semibold text-sm" x-text="t('history_title')"></div>
+        </div>
+        <div class="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+          <p x-show="!historyItems.length" class="text-gray-600 text-sm text-center py-8"
+             x-text="t('history_empty')"></p>
+          <template x-for="item in historyItems" :key="item.id">
+            <div class="bg-gray-900 border border-gray-800 rounded-lg px-4 py-3">
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="text-sm font-medium truncate"
+                       x-text="item.input_filenames.join(', ')"></div>
+                  <div class="text-xs text-gray-500 mt-0.5"
+                       x-text="`${item.provider_name} · ${item.model_id} · ${new Date(item.created_at*1000).toLocaleString()}`"></div>
+                  <div class="mt-1.5 flex gap-2 flex-wrap">
+                    <template x-for="path in item.output_paths" :key="path">
+                      <a :href="`/api/download?path=${encodeURIComponent(path)}`"
+                         class="text-xs text-indigo-400 hover:underline"
+                         x-text="path.split(/[\\/]/).pop()"></a>
+                    </template>
+                  </div>
+                </div>
+                <button @click="deleteHistory(item.id)"
+                        class="text-gray-600 hover:text-red-400 text-sm flex-shrink-0">🗑</button>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- SETTINGS SECTION -->
+      <div x-show="currentSection==='settings'" class="flex flex-col h-full">
+        <div class="px-4 py-3 border-b border-gray-800 flex-shrink-0">
+          <div class="font-semibold text-sm" x-text="t('settings_title')"></div>
+        </div>
+        <div class="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+
+          <!-- API Keys -->
+          <div>
+            <div class="text-xs uppercase text-gray-500 font-semibold mb-3"
+                 x-text="t('settings_api_keys')"></div>
+            <div class="space-y-3">
+              <div>
+                <label class="text-xs text-gray-400" x-text="t('settings_openai_key')"></label>
+                <div class="flex gap-2 mt-1">
+                  <div class="flex-1 bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-xs text-gray-400"
+                       x-text="settings.openai_key_set ? 'sk-...set' : 'Not configured'"></div>
+                </div>
+              </div>
+              <div>
+                <label class="text-xs text-gray-400" x-text="t('settings_elevenlabs_key')"></label>
+                <div class="flex gap-2 mt-1">
+                  <div class="flex-1 bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-xs text-gray-400"
+                       x-text="settings.elevenlabs_key_set ? '...set' : 'Not configured'"></div>
+                </div>
+              </div>
+              <p class="text-xs text-gray-600">Keys are stored in <code>.env</code> in the project folder.</p>
+            </div>
+          </div>
+
+          <!-- Language -->
+          <div>
+            <label class="text-xs text-gray-400" x-text="t('settings_language')"></label>
+            <select @change="saveSettings({language: $event.target.value})"
+                    class="mt-1 block bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-300">
+              <option value="en" :selected="settings.language==='en'">English</option>
+              <option value="it" :selected="settings.language==='it'">Italiano</option>
+            </select>
+          </div>
+
+          <!-- Chunk size -->
+          <div>
+            <label class="text-xs text-gray-400" x-text="t('settings_chunk_size')"></label>
+            <input type="number" :value="settings.chunk_size_sec" min="30" max="1800"
+                   @change="saveSettings({chunk_size_sec: parseInt($event.target.value)})"
+                   class="mt-1 block w-32 bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-300">
+          </div>
+
+          <!-- Re-run wizard -->
+          <div class="pt-2 border-t border-gray-800">
+            <button @click="showWizard = true"
+                    class="text-xs text-indigo-400 hover:underline">
+              Run setup wizard again
+            </button>
+          </div>
+
+        </div>
+      </div>
+
+    </div><!-- end main panel -->
+  </div><!-- end layout -->
+
   <script src="/static/alpine.min.js" defer></script>
   <script src="/static/app.js" defer></script>
 </body>
