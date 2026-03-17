@@ -69,12 +69,20 @@ function app() {
     async loadProviders() {
       const r = await fetch('/api/providers');
       this.providers = await r.json();
-      if (this.providers.length) {
+      if (this.providers.length && !this.selectedProvider) {
         this.selectedProvider = this.providers[0];
-        if (this.selectedProvider.models.length)
-          this.selectedModel = this.selectedProvider.models[0];
+        this.selectedModel = this.selectedProvider.models[0] || null;
       }
       this._updateLiveProviders();
+    },
+
+    onProviderChange(name) {
+      this.selectedProvider = this.providers.find(p => p.name === name) || null;
+      this.selectedModel = this.selectedProvider?.models[0] || null;
+    },
+
+    onModelChange(id) {
+      this.selectedModel = (this.selectedProvider?.models || []).find(m => m.id === id) || null;
     },
 
     async loadSettings() {
