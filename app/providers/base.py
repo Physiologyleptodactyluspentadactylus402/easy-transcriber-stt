@@ -34,6 +34,7 @@ class TranscribeOptions:
     speaker_labels: bool = False
     output_formats: list[str] = field(default_factory=lambda: ["txt"])
     chunk_size_sec: int = 600
+    model_id: str = "whisper-1"
 
 
 @dataclass

@@ -42,6 +42,11 @@ def test_transcript_result_empty():
     assert r.provider_name == ""
 
 
+def test_transcribe_options_model_id_default():
+    opts = TranscribeOptions()
+    assert opts.model_id == "whisper-1"
+
+
 def test_base_provider_is_abstract():
     with pytest.raises(TypeError):
         BaseProvider()  # cannot instantiate abstract class
