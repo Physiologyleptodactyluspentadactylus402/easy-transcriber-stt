@@ -1,3 +1,4 @@
-# Installed on-demand when user selects a local model
 faster-whisper>=1.0.0
-# torch and transformers installed separately per platform — see SETUP.md
+transformers>=4.40.0
+torch>=2.3.0
+torchaudio>=2.3.0
