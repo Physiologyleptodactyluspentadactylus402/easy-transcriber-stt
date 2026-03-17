@@ -16,47 +16,55 @@ def test_models_list(provider):
     assert "1.7b" in ids
 
 
-def test_0_6b_has_no_timestamps(provider):
-    m = next(m for m in provider.models if m.id == "0.6b")
-    assert m.supports_timestamps is False
-
-
-def test_1_7b_has_timestamps(provider):
-    m = next(m for m in provider.models if m.id == "1.7b")
-    assert m.supports_timestamps is True
+def test_no_timestamps(provider):
+    """Both models report supports_timestamps=False (qwen-asr API doesn't return them)."""
+    for m in provider.models:
+        assert m.supports_timestamps is False
 
 
 def test_is_available_when_package_missing():
     import app.providers.qwen3_asr as mod
-    original = mod.pipeline
-    mod.pipeline = None
+    original = mod._AVAILABLE
+    mod._AVAILABLE = False
     p = Qwen3ASRProvider()
     assert p.is_available() is False
-    mod.pipeline = original
+    mod._AVAILABLE = original
 
 
 def test_install_deps_calls_pip():
     p = Qwen3ASRProvider()
     calls = []
-    with patch("subprocess.check_call") as mock_cc:
+    # Mock both subprocess.check_call AND the re-import that follows
+    with patch("subprocess.check_call") as mock_cc, \
+         patch.dict("sys.modules", {"qwen_asr": MagicMock()}):
         p.install_deps(progress_callback=lambda prog, msg: calls.append(prog))
     mock_cc.assert_called_once()
     args = mock_cc.call_args[0][0]
-    assert "transformers" in args or "torch" in args
+    assert "qwen-asr" in args
     assert calls[0] == 0.0
     assert calls[-1] == 1.0
 
 
 @pytest.mark.asyncio
-async def test_transcribe_batch_no_timestamps(tmp_path):
+async def test_transcribe_batch(tmp_path):
     dummy = tmp_path / "chunk_01.mp3"
     dummy.write_bytes(b"fake")
 
-    mock_result = {"text": " Ciao mondo."}
+    # Mock a TranscriptionResult-like object
+    mock_result = MagicMock()
+    mock_result.text = " Ciao mondo."
+    mock_result.language = "Italian"
 
-    with patch("app.providers.qwen3_asr.pipeline") as mock_pipeline:
-        mock_pipe = MagicMock(return_value=mock_result)
-        mock_pipeline.return_value = mock_pipe
+    mock_model = MagicMock()
+    mock_model.transcribe.return_value = [mock_result]
+
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = False
+
+    with patch("app.providers.qwen3_asr.Qwen3ASRModel") as mock_cls, \
+         patch("app.providers.qwen3_asr._AVAILABLE", True), \
+         patch("app.providers.qwen3_asr.torch", mock_torch):
+        mock_cls.from_pretrained.return_value = mock_model
 
         p = Qwen3ASRProvider()
         opts = TranscribeOptions(model_id="0.6b")
@@ -68,40 +76,37 @@ async def test_transcribe_batch_no_timestamps(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_transcribe_batch_with_timestamps(tmp_path):
+async def test_transcribe_batch_empty_result(tmp_path):
     dummy = tmp_path / "chunk_01.mp3"
     dummy.write_bytes(b"fake")
 
-    mock_result = {
-        "chunks": [
-            {"text": " First segment.", "timestamp": (0.0, 4.0)},
-            {"text": " Second segment.", "timestamp": (4.0, 8.5)},
-        ]
-    }
+    mock_model = MagicMock()
+    mock_model.transcribe.return_value = []
 
-    with patch("app.providers.qwen3_asr.pipeline") as mock_pipeline:
-        mock_pipe = MagicMock(return_value=mock_result)
-        mock_pipeline.return_value = mock_pipe
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = False
+
+    with patch("app.providers.qwen3_asr.Qwen3ASRModel") as mock_cls, \
+         patch("app.providers.qwen3_asr._AVAILABLE", True), \
+         patch("app.providers.qwen3_asr.torch", mock_torch):
+        mock_cls.from_pretrained.return_value = mock_model
 
         p = Qwen3ASRProvider()
         opts = TranscribeOptions(model_id="1.7b")
         result = await p.transcribe_batch([dummy], opts)
 
-    assert len(result.segments) == 2
-    assert result.segments[0].start == 0.0
-    assert result.segments[0].end == 4.0
-    assert result.segments[1].start == 4.0
-    assert result.segments[1].end == 8.5
+    assert len(result.segments) == 1
+    assert result.segments[0].text == ""
 
 
 @pytest.mark.asyncio
 async def test_transcribe_raises_when_unavailable(tmp_path):
     import app.providers.qwen3_asr as mod
-    original = mod.pipeline
-    mod.pipeline = None
+    original = mod._AVAILABLE
+    mod._AVAILABLE = False
     dummy = tmp_path / "chunk_01.mp3"
     dummy.write_bytes(b"x")
     p = Qwen3ASRProvider()
-    with pytest.raises(RuntimeError, match="transformers"):
+    with pytest.raises(RuntimeError, match="qwen-asr"):
         await p.transcribe_batch([dummy], TranscribeOptions())
-    mod.pipeline = original
+    mod._AVAILABLE = original

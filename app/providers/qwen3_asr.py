@@ -1,16 +1,26 @@
 from __future__ import annotations
 import asyncio
+import logging
 from pathlib import Path
 from typing import Callable
 import subprocess
 import sys
 
+logger = logging.getLogger("transcriber.qwen3_asr")
+
+# ---------------------------------------------------------------------------
+# Try importing the official qwen-asr package (pip install qwen-asr)
+# This is the ONLY supported way to run Qwen3-ASR locally.
+# It wraps transformers + torch internally.
+# ---------------------------------------------------------------------------
 try:
-    from transformers import pipeline
+    from qwen_asr import Qwen3ASRModel  # type: ignore[import-untyped]
     import torch
+    _AVAILABLE = True
 except ImportError:
-    pipeline = None  # type: ignore[assignment,misc]
+    Qwen3ASRModel = None  # type: ignore[assignment,misc]
     torch = None  # type: ignore[assignment,misc]
+    _AVAILABLE = False
 
 from app.providers.base import (
     BaseProvider, ModelInfo, HardwareHint, TranscribeOptions,
@@ -30,7 +40,7 @@ class Qwen3ASRProvider(BaseProvider):
         ModelInfo(
             id="0.6b",
             name="Qwen3-ASR 0.6B",
-            description="Compact model, runs on CPU. No segment timestamps.",
+            description="Compact model, runs on CPU. ~600M parameters.",
             hardware_hint=HardwareHint.CPU_RECOMMENDED,
             supports_timestamps=False,
             supports_live=True,
@@ -38,96 +48,98 @@ class Qwen3ASRProvider(BaseProvider):
         ModelInfo(
             id="1.7b",
             name="Qwen3-ASR 1.7B",
-            description="Better accuracy with segment timestamps. GPU recommended.",
+            description="Best accuracy, GPU recommended. ~1.7B parameters.",
             hardware_hint=HardwareHint.GPU_OPTIONAL,
-            supports_timestamps=True,
+            supports_timestamps=False,
             supports_live=True,
         ),
     ]
 
     def __init__(self) -> None:
-        self._pipe_cache: dict[str, object] = {}
+        self._model_cache: dict[str, object] = {}
 
     def is_available(self) -> bool:
-        return pipeline is not None
+        return _AVAILABLE
 
     def install_deps(
         self,
         progress_callback: Callable[[float, str], None] | None = None,
     ) -> None:
-        global pipeline, torch
+        global Qwen3ASRModel, torch, _AVAILABLE
         if progress_callback:
-            progress_callback(0.0, "Installing transformers and torch…")
+            progress_callback(0.0, "Installing qwen-asr + torch…")
         subprocess.check_call([
             sys.executable, "-m", "pip", "install",
-            "git+https://github.com/huggingface/transformers.git",
-            "torch", "torchaudio",
+            "qwen-asr", "torch", "torchaudio",
         ])
-        # Re-import after install so is_available() returns True
+        # Re-import after install so is_available() flips to True
         # without requiring a server restart
-        from transformers import pipeline as _pipeline
+        from qwen_asr import Qwen3ASRModel as _Model  # type: ignore[import-untyped]
         import torch as _torch
-        pipeline = _pipeline
+        Qwen3ASRModel = _Model
         torch = _torch
+        _AVAILABLE = True
+        logger.info("qwen-asr installed successfully")
         if progress_callback:
             progress_callback(1.0, "Dependencies installed.")
 
-    def _load_pipe(self, model_id: str) -> object:
-        if model_id not in self._pipe_cache:
+    def _load_model(self, model_id: str) -> object:
+        """Load a Qwen3ASRModel, caching by model_id."""
+        if model_id not in self._model_cache:
             hf_id = _HF_MODEL_IDS.get(model_id, model_id)
-            device = "cuda" if (torch and torch.cuda.is_available()) else "cpu"
-            dtype = (torch.float16 if device == "cuda" else torch.float32) if torch else None
-            pipe_kwargs: dict = {
-                "model": hf_id,
-                "device": device,
+            has_cuda = torch is not None and torch.cuda.is_available()
+            device_map = "cuda:0" if has_cuda else "cpu"
+
+            kwargs: dict = {
+                "device_map": device_map,
+                "max_new_tokens": 512,
             }
-            if dtype is not None:
-                pipe_kwargs["torch_dtype"] = dtype
-            self._pipe_cache[model_id] = pipeline(
-                "automatic-speech-recognition",
-                trust_remote_code=True,
-                **pipe_kwargs,
+            if torch is not None:
+                kwargs["dtype"] = torch.bfloat16 if has_cuda else torch.float32
+
+            logger.info("Loading Qwen3-ASR model %s on %s …", hf_id, device_map)
+            self._model_cache[model_id] = Qwen3ASRModel.from_pretrained(
+                hf_id, **kwargs,
             )
-        return self._pipe_cache[model_id]
+            logger.info("Qwen3-ASR model %s loaded", hf_id)
+        return self._model_cache[model_id]
 
     async def transcribe_batch(
         self, chunks: list[Path], opts: TranscribeOptions
     ) -> TranscriptResult:
-        if pipeline is None:
+        if not _AVAILABLE:
             raise RuntimeError(
-                "transformers/torch not installed. Open Settings to install."
+                "qwen-asr package not installed. Open Settings to install."
             )
         loop = asyncio.get_running_loop()
-        pipe = await loop.run_in_executor(None, lambda: self._load_pipe(opts.model_id))
-        return_timestamps = opts.model_id == "1.7b"
+        model = await loop.run_in_executor(
+            None, lambda: self._load_model(opts.model_id)
+        )
 
         segments: list[Segment] = []
         offset = 0.0
 
         for chunk_path in chunks:
             def _run(path=chunk_path):
-                return pipe(str(path), return_timestamps=return_timestamps)
+                # qwen-asr accepts local paths, URLs, base64, or numpy arrays
+                results = model.transcribe(audio=str(path))
+                return results
 
-            result = await loop.run_in_executor(None, _run)
+            results = await loop.run_in_executor(None, _run)
 
-            if return_timestamps and isinstance(result.get("chunks"), list):
-                chunk_segs = result["chunks"]
-                for ch in chunk_segs:
-                    ts = ch.get("timestamp") or (offset, offset + opts.chunk_size_sec)
-                    segments.append(Segment(
-                        start=(ts[0] or offset) + offset,
-                        end=(ts[1] or offset + opts.chunk_size_sec) + offset,
-                        text=ch["text"].strip(),
-                    ))
-                offset = segments[-1].end if segments else offset + opts.chunk_size_sec
+            # results is a list of TranscriptionResult objects
+            # Each has .text and .language attributes
+            if results:
+                text = results[0].text.strip()
             else:
-                text = (result.get("text") or "").strip()
-                segments.append(Segment(
-                    start=offset,
-                    end=offset + float(opts.chunk_size_sec),
-                    text=text,
-                ))
-                offset += float(opts.chunk_size_sec)
+                text = ""
+
+            segments.append(Segment(
+                start=offset,
+                end=offset + float(opts.chunk_size_sec),
+                text=text,
+            ))
+            offset += float(opts.chunk_size_sec)
 
         return TranscriptResult(
             segments=segments,
