@@ -1,97 +1,115 @@
 #!/usr/bin/env python3
-import sys
+"""
+Transcriber bootstrapper.
+Run this script to install dependencies and open the app in your browser.
+"""
 import subprocess
-import importlib
-import shutil
-import os
+import sys
+import socket
+import webbrowser
+import time
 from pathlib import Path
 
-REQUIRED_PACKAGES = [
-    "customtkinter",
-    "pydub",
-    "python-dotenv",
-    "openai",
+MIN_PYTHON = (3, 10)
+THIS_DIR = Path(__file__).parent.resolve()
+STATIC_DIR = THIS_DIR / "app" / "static"
+
+REQUIRED_ASSETS = [
+    STATIC_DIR / "alpine.min.js",
+    STATIC_DIR / "tailwind.cdn.min.js",
 ]
 
-THIS_DIR = Path(__file__).parent.resolve()
-MAIN_APP = THIS_DIR / "main_ui.py"
 
-def ensure_pip():
-    try:
-        import pip
-        return True
-    except Exception:
-        print("[setup] pip non trovato. Provo a installarlo con ensurepip...")
-        try:
-            import ensurepip
-            ensurepip.bootstrap()
-            return True
-        except Exception as e:
-            print(f"[errore] impossibile installare pip automaticamente: {e}")
-            return False
+def check_python():
+    if sys.version_info < MIN_PYTHON:
+        print(f"[error] Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ required. "
+              f"You have {sys.version_info.major}.{sys.version_info.minor}.")
+        print("  Download: https://www.python.org/downloads/")
+        sys.exit(1)
+    print(f"[ok] Python {sys.version_info.major}.{sys.version_info.minor}")
 
-def install_missing(packages):
-    missing = []
-    for pkg in packages:
-        try:
-            importlib.import_module(pkg.replace("-", "_"))
-        except Exception:
-            missing.append(pkg)
 
-    if not missing:
-        print("[ok] Tutti i pacchetti Python richiesti sono già presenti.")
-        return True
+def install_requirements():
+    req_file = THIS_DIR / "requirements.txt"
+    print("[setup] Installing/verifying Python packages...")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-r", str(req_file), "--quiet"],
+        capture_output=False,
+    )
+    if result.returncode != 0:
+        print("[error] Package installation failed. Check the output above.")
+        sys.exit(1)
+    print("[ok] Packages installed")
 
-    print(f"[setup] Installo pacchetti mancanti: {', '.join(missing)}")
-    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "pip"]
-    subprocess.run(cmd, check=False)
 
-    cmd = [sys.executable, "-m", "pip", "install", *missing]
-    try:
-        subprocess.run(cmd, check=True)
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"[errore] Installazione pacchetti fallita: {e}")
-        return False
+def check_static_assets():
+    missing = [a for a in REQUIRED_ASSETS if not a.exists()]
+    if missing:
+        print(f"[error] Missing static assets: {[str(a.name) for a in missing]}")
+        print("  Run: git checkout app/static/ OR re-clone the repository.")
+        sys.exit(1)
+    print("[ok] Static assets present")
+
 
 def check_ffmpeg():
-    ffmpeg = shutil.which("ffmpeg")
-    ffprobe = shutil.which("ffprobe")
-    if ffmpeg and ffprobe:
-        print(f"[ok] ffmpeg trovato: {ffmpeg}")
-        return True
-    print("[attenzione] ffmpeg e/o ffprobe non trovati nel PATH.")
-    print(" - Installa ffmpeg (ad es. macOS: brew install ffmpeg, Ubuntu: sudo apt-get install ffmpeg, Windows: choco install ffmpeg)")
-    return False
+    import shutil
+    if shutil.which("ffmpeg"):
+        print("[ok] ffmpeg found")
+    else:
+        print("[warning] ffmpeg not found — audio conversion will not work.")
+        print("  macOS:   brew install ffmpeg")
+        print("  Ubuntu:  sudo apt-get install ffmpeg")
+        print("  Windows: choco install ffmpeg   (or download from ffmpeg.org)")
 
-def load_env():
-    try:
-        from dotenv import load_dotenv
-        env_path = THIS_DIR / ".env"
-        if env_path.exists():
-            load_dotenv(env_path)
-            print("[ok] .env caricato")
-    except Exception:
-        pass
 
-def launch_app():
-    if not MAIN_APP.exists():
-        print(f"[errore] File principale non trovato: {MAIN_APP}")
-        sys.exit(1)
-    env = os.environ.copy()
-    print("[run] Avvio applicazione GUI…")
-    subprocess.run([sys.executable, str(MAIN_APP)], env=env)
+def find_free_port(start: int = 8000, end: int = 8010) -> int:
+    for port in range(start, end + 1):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("localhost", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError("No free port found in range 8000-8010")
+
+
+def load_dotenv():
+    env_file = THIS_DIR / ".env"
+    if env_file.exists():
+        try:
+            from dotenv import load_dotenv as _load
+            _load(env_file)
+            print("[ok] .env loaded")
+        except ImportError:
+            pass
+
 
 def main():
-    if not ensure_pip():
-        sys.exit(1)
-    if not install_missing(REQUIRED_PACKAGES):
-        sys.exit(1)
-    ff_ok = check_ffmpeg()
-    load_env()
-    launch_app()
-    if not ff_ok:
-        print("\n[nota] L'app è partita, ma per processare audio serve installare ffmpeg.")
+    check_python()
+    install_requirements()
+    check_static_assets()
+    check_ffmpeg()
+    load_dotenv()
+
+    port = find_free_port()
+    url = f"http://localhost:{port}"
+    print(f"\n[run] Starting Transcriber on {url}")
+    print("      Press Ctrl+C to stop.\n")
+
+    # Small delay then open browser
+    def open_browser():
+        time.sleep(1.2)
+        webbrowser.open(url)
+
+    import threading
+    threading.Thread(target=open_browser, daemon=True).start()
+
+    # Import here so packages are already installed above
+    import uvicorn
+    from app.main import create_app
+    app = create_app(port=port)
+    uvicorn.run(app, host="localhost", port=port, log_level="warning")
+
 
 if __name__ == "__main__":
     main()
