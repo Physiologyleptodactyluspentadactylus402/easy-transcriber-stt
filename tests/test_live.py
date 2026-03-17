@@ -69,7 +69,7 @@ async def test_live_session_stop_returns_output_files(tmp_path):
     with patch.object(s, "_transcribe_buffer", new=fake_transcribe):
         output_files = await s.stop(ws_manager)
 
-    assert len(output_files) >= 1
+    assert len(output_files) == 2
     txt_file = next((f for f in output_files if f.suffix == ".txt"), None)
     assert txt_file is not None
     content = txt_file.read_text(encoding="utf-8")
