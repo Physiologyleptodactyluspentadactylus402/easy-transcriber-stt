@@ -260,6 +260,12 @@ def create_app(
                         model_id=data.get("model_id", "tiny"),
                     )
                     provider = _get_providers().get(data.get("provider_name", "faster_whisper"))
+                    if provider is None or not provider.is_available():
+                        await ws.send_json({
+                            "type": "error",
+                            "message": f"Provider '{data.get('provider_name')}' is not available.",
+                        })
+                        continue
                     out_dir = settings.resolve_output_dir()
                     from app.core.live import LiveSession
                     session = LiveSession(live_session_id, provider, opts, out_dir)
@@ -294,8 +300,10 @@ def create_app(
             if live_session_id:
                 session = _live_sessions.get(live_session_id)
                 if session:
-                    await session.stop(_ws_manager)
-                    _live_sessions.remove(live_session_id)
+                    try:
+                        await session.stop(_ws_manager)
+                    finally:
+                        _live_sessions.remove(live_session_id)
 
     return app
 
