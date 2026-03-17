@@ -77,6 +77,7 @@
   "provider_hardware_gpu_recommended": "GPU consigliata",
   "provider_local_badge": "Locale",
   "provider_unavailable": "Non disponibile",
+  "provider_needs_key": "Chiave API necessaria \u2192 Impostazioni",
   "settings_local_models": "Modelli locali",
   "settings_local_models_desc": "Modelli eseguiti interamente sul tuo computer — nessuna chiave API necessaria."
 }

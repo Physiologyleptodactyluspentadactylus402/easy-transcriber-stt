@@ -96,11 +96,19 @@
               <select @change="onProviderChange($event.target.value)"
                       class="bg-gray-800 border border-gray-700 text-xs rounded-md px-2 py-1 text-gray-300">
                 <template x-for="p in providers" :key="p.name">
-                  <option :value="p.name" :disabled="!p.available" :selected="selectedProvider?.name === p.name"
-                          x-text="p.available ? p.name : p.name + ' (' + t('provider_unavailable') + ')'"></option>
+                  <option :value="p.name" :selected="selectedProvider?.name === p.name"
+                          x-text="p.available ? p.name : p.name + ' ⚠'"></option>
                 </template>
               </select>
-              <template x-if="selectedProvider && !selectedProvider.available">
+              <!-- API-key providers: link to Settings -->
+              <template x-if="selectedProvider && !selectedProvider.available && isApiKeyProvider(selectedProvider.name)">
+                <button @click="currentSection='settings'"
+                        class="text-xs text-yellow-400 hover:text-yellow-300 underline mt-1"
+                        x-text="t('provider_needs_key')">
+                </button>
+              </template>
+              <!-- Installable providers: open install modal -->
+              <template x-if="selectedProvider && !selectedProvider.available && !isApiKeyProvider(selectedProvider.name)">
                 <button @click="openInstallModal(selectedProvider)"
                         class="text-xs text-indigo-400 hover:text-indigo-300 underline mt-1"
                         x-text="t('install_not_installed')">

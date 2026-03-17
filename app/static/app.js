@@ -81,6 +81,10 @@ function app() {
       this.selectedModel = this.selectedProvider?.models[0] || null;
     },
 
+    isApiKeyProvider(name) {
+      return ['openai', 'elevenlabs'].includes(name);
+    },
+
     onModelChange(id) {
       this.selectedModel = (this.selectedProvider?.models || []).find(m => m.id === id) || null;
     },
