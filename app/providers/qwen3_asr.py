@@ -72,6 +72,17 @@ class Qwen3ASRProvider(BaseProvider):
             sys.executable, "-m", "pip", "install",
             "qwen-asr", "torch", "torchaudio",
         ])
+        # pip may have downgraded/upgraded transformers — purge stale
+        # cached modules so Python loads the new version from disk.
+        import importlib
+        for mod_name in list(sys.modules):
+            if mod_name == "transformers" or mod_name.startswith("transformers."):
+                del sys.modules[mod_name]
+        # Also purge any prior failed qwen_asr import
+        for mod_name in list(sys.modules):
+            if mod_name == "qwen_asr" or mod_name.startswith("qwen_asr."):
+                del sys.modules[mod_name]
+
         # Re-import after install so is_available() flips to True
         # without requiring a server restart
         from qwen_asr import Qwen3ASRModel as _Model  # type: ignore[import-untyped]
