@@ -38,6 +38,13 @@ function app() {
     // Wizard
     showWizard: !window.APP_WIZARD_COMPLETE,
 
+    // ── Install modal state ──────────────────────────────────────
+    installModal: null,   // { providerName, providerLabel, packages } or null
+    installing: false,
+    installProgress: 0,
+    installMessage: '',
+    installError: null,
+
     // WebSocket
     _ws: null,
 
@@ -173,6 +180,21 @@ function app() {
         const item = this.files.find(f => f.jobId === msg.job_id);
         if (item) { item.status = 'error'; item.error = msg.message; }
         this.isRunning = false;
+      } else if (msg.type === 'install_progress') {
+        this.installProgress = msg.progress;
+        this.installMessage = msg.message;
+      } else if (msg.type === 'install_done') {
+        this.installing = false;
+        if (msg.success) {
+          this.installProgress = 1;
+          this.installMessage = this.t('install_done_ok');
+          setTimeout(() => {
+            this.closeInstallModal();
+            this.loadProviders();
+          }, 1500);
+        } else {
+          this.installError = msg.error || this.t('install_done_error');
+        }
       }
     },
 
@@ -192,6 +214,49 @@ function app() {
     async completeWizard(setupType) {
       await this.saveSettings({ wizard_complete: true });
       this.showWizard = false;
+    },
+
+    openInstallModal(provider) {
+        this.installModal = {
+            providerName: provider.name,
+            providerLabel: provider.name.replace(/_/g, '-'),
+            packages: provider.name === 'faster_whisper'
+                ? 'faster-whisper (~150 MB)'
+                : provider.name === 'qwen3_asr'
+                    ? 'transformers + torch (~2 GB)'
+                    : null,
+        };
+        this.installing = false;
+        this.installProgress = 0;
+        this.installMessage = '';
+        this.installError = null;
+    },
+
+    closeInstallModal() {
+        this.installModal = null;
+    },
+
+    async confirmInstall() {
+        if (!this.installModal) return;
+        this.installing = true;
+        this.installProgress = 0;
+        this.installError = null;
+        try {
+            const r = await fetch(`/api/install/${this.installModal.providerName}`, { method: 'POST' });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        } catch (e) {
+            this.installing = false;
+            this.installError = e.message;
+        }
+    },
+
+    selectModel(provider, model) {
+        if (!provider.available) {
+            this.openInstallModal(provider);
+            return;
+        }
+        this.selectedProvider = provider.name;
+        this.selectedModel = model.id;
     },
 
     hardwareBadgeClass(hint) {

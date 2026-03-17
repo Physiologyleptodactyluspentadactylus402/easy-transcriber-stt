@@ -81,22 +81,42 @@
             <div class="font-semibold text-sm" x-text="t('nav_transcribe')"></div>
             <div class="text-xs text-gray-500" x-text="`${files.length} file(s) in queue`"></div>
           </div>
-          <div class="flex gap-2">
+          <div class="flex gap-2 items-center flex-wrap">
             <!-- Provider selector -->
-            <select x-model="selectedProvider"
-                    @change="selectedModel = selectedProvider?.models[0] || null"
-                    class="bg-gray-800 border border-gray-700 text-xs rounded-md px-2 py-1 text-gray-300">
-              <template x-for="p in providers" :key="p.name">
-                <option :value="p" :disabled="!p.available" x-text="p.name"></option>
+            <div class="flex flex-col gap-0.5">
+              <select x-model="selectedProvider"
+                      @change="selectedModel = selectedProvider?.models[0] || null"
+                      class="bg-gray-800 border border-gray-700 text-xs rounded-md px-2 py-1 text-gray-300">
+                <template x-for="p in providers" :key="p.name">
+                  <option :value="p" :disabled="!p.available" x-text="p.available ? p.name : p.name + ' (' + t('provider_unavailable') + ')'"></option>
+                </template>
+              </select>
+              <template x-if="selectedProvider && !selectedProvider.available">
+                <button @click="openInstallModal(selectedProvider)"
+                        class="text-xs text-indigo-400 hover:text-indigo-300 underline mt-1"
+                        x-text="t('install_not_installed')">
+                </button>
               </template>
-            </select>
+            </div>
             <!-- Model selector -->
-            <select x-model="selectedModel"
-                    class="bg-gray-800 border border-gray-700 text-xs rounded-md px-2 py-1 text-gray-300">
-              <template x-for="m in (selectedProvider?.models || [])" :key="m.id">
-                <option :value="m" x-text="m.name"></option>
+            <div class="flex flex-col gap-0.5">
+              <select x-model="selectedModel"
+                      class="bg-gray-800 border border-gray-700 text-xs rounded-md px-2 py-1 text-gray-300">
+                <template x-for="m in (selectedProvider?.models || [])" :key="m.id">
+                  <option :value="m" x-text="m.name"></option>
+                </template>
+              </select>
+              <template x-if="selectedModel && selectedModel.hardware_hint">
+                <span class="text-xs px-1.5 py-0.5 rounded"
+                      :class="{
+                        'bg-indigo-900 text-indigo-300': selectedModel.hardware_hint === 'cloud',
+                        'bg-green-900 text-green-300': selectedModel.hardware_hint === 'cpu' || selectedModel.hardware_hint === 'cpu_recommended',
+                        'bg-yellow-900 text-yellow-300': selectedModel.hardware_hint === 'gpu_optional' || selectedModel.hardware_hint === 'gpu_recommended',
+                      }"
+                      x-text="t('provider_hardware_' + selectedModel.hardware_hint)">
+                </span>
               </template>
-            </select>
+            </div>
           </div>
         </div>
 
@@ -295,6 +315,52 @@
 
     </div><!-- end main panel -->
   </div><!-- end layout -->
+
+  <!-- Install Modal -->
+  <div x-show="installModal !== null"
+       x-cloak
+       class="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
+       @keydown.escape.window="closeInstallModal()">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-md mx-4 shadow-2xl">
+      <h2 class="text-lg font-semibold text-white mb-2"
+          x-text="t('install_modal_title').replace('{provider}', installModal?.providerLabel)"></h2>
+      <p class="text-gray-400 text-sm mb-4" x-text="t('install_prompt')"></p>
+
+      <template x-if="installModal?.packages">
+        <div class="bg-gray-800 rounded-lg px-4 py-3 mb-4 text-sm text-gray-300">
+          <span class="text-gray-500 text-xs uppercase tracking-wide" x-text="t('install_disk')"></span>
+          <div x-text="installModal.packages" class="mt-1 font-mono text-indigo-300"></div>
+        </div>
+      </template>
+
+      <!-- Progress bar (shown while installing) -->
+      <template x-if="installing">
+        <div class="mb-4">
+          <div class="w-full bg-gray-800 rounded-full h-2 mb-2">
+            <div class="bg-indigo-500 h-2 rounded-full transition-all duration-300"
+                 :style="`width: ${Math.round(installProgress * 100)}%`"></div>
+          </div>
+          <p class="text-xs text-gray-400" x-text="installMessage || t('install_in_progress')"></p>
+        </div>
+      </template>
+
+      <!-- Error -->
+      <template x-if="installError">
+        <p class="text-red-400 text-sm mb-4" x-text="installError"></p>
+      </template>
+
+      <div class="flex gap-3 justify-end">
+        <button @click="closeInstallModal()"
+                :disabled="installing"
+                class="px-4 py-2 text-sm text-gray-400 hover:text-white disabled:opacity-40"
+                x-text="t('install_cancel')"></button>
+        <button @click="confirmInstall()"
+                :disabled="installing"
+                class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm rounded-lg font-medium"
+                x-text="installing ? t('install_in_progress') : t('install_confirm')"></button>
+      </div>
+    </div>
+  </div>
 
   <script src="/static/alpine.min.js" defer></script>
   <script src="/static/app.js" defer></script>
