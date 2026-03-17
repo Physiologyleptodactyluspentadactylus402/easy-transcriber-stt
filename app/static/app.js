@@ -226,8 +226,10 @@ function app() {
 
       } else if (msg.type === 'live_session_stopped') {
         this.liveRecording = false;
+        this.livePaused = false;
         this.liveSessionId = null;
         this.liveTranscript = [];
+        this.liveTimer = 0;
       }
     },
 
