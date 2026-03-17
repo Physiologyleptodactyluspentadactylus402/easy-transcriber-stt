@@ -1,0 +1,137 @@
+<h2>UI Layout — Which feels right?</h2>
+<p class="subtitle">Due approcci per la schermata principale. Entrambi full-local, Alpine.js + Tailwind vendorizzati.</p>
+
+<div class="split" style="gap: 1.5rem; align-items: start;">
+
+  <!-- OPTION A: Sidebar layout -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)" style="cursor:pointer;">
+    <div class="card-body" style="padding: 0;">
+      <div style="background: #1a1a2e; border-radius: 10px 10px 0 0; overflow: hidden; border: 1px solid #2d2d4e;">
+
+        <!-- Top bar -->
+        <div style="background: #16213e; padding: 0.6rem 1rem; display: flex; align-items: center; gap: 0.75rem; border-bottom: 1px solid #2d2d4e;">
+          <div style="width: 10px; height: 10px; border-radius: 50%; background: #ef4444;"></div>
+          <div style="width: 10px; height: 10px; border-radius: 50%; background: #f59e0b;"></div>
+          <div style="width: 10px; height: 10px; border-radius: 50%; background: #10b981;"></div>
+          <span style="font-size: 0.7rem; color: #6b7280; margin-left: 0.5rem;">localhost:8000</span>
+        </div>
+
+        <div style="display: flex; height: 320px;">
+          <!-- Sidebar -->
+          <div style="width: 55px; background: #0f0f23; border-right: 1px solid #2d2d4e; display: flex; flex-direction: column; align-items: center; padding: 0.75rem 0; gap: 1rem;">
+            <div style="width: 32px; height: 32px; background: #6366f1; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 0.9rem;">🎙</div>
+            <div style="width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; color: #6b7280;">📂</div>
+            <div style="width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; color: #6b7280;">⚙️</div>
+          </div>
+
+          <!-- Main content -->
+          <div style="flex: 1; padding: 0.75rem; overflow: hidden;">
+            <div style="font-size: 0.7rem; color: #9ca3af; margin-bottom: 0.5rem;">TRANSCRIBE</div>
+
+            <!-- Drop zone -->
+            <div style="border: 2px dashed #374151; border-radius: 8px; padding: 1rem; text-align: center; margin-bottom: 0.6rem; background: #1f2937;">
+              <div style="font-size: 1.2rem;">📁</div>
+              <div style="font-size: 0.7rem; color: #9ca3af;">Drop audio files here</div>
+            </div>
+
+            <!-- File in queue -->
+            <div style="background: #1f2937; border-radius: 6px; padding: 0.4rem 0.6rem; margin-bottom: 0.4rem; display: flex; justify-content: space-between; align-items: center;">
+              <div style="font-size: 0.65rem; color: #e5e7eb;">lecture_01.mp3</div>
+              <div style="font-size: 0.6rem; background: #6366f1; color: white; padding: 0.1rem 0.4rem; border-radius: 4px;">67%</div>
+            </div>
+            <div style="background: #1f2937; border-radius: 6px; padding: 0.4rem 0.6rem; margin-bottom: 0.6rem; display: flex; justify-content: space-between; align-items: center;">
+              <div style="font-size: 0.65rem; color: #6b7280;">lecture_02.mp3</div>
+              <div style="font-size: 0.6rem; color: #6b7280;">waiting</div>
+            </div>
+
+            <!-- Provider + format row -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem;">
+              <div style="background: #1f2937; border-radius: 6px; padding: 0.4rem 0.6rem;">
+                <div style="font-size: 0.55rem; color: #9ca3af;">PROVIDER</div>
+                <div style="font-size: 0.65rem; color: #e5e7eb;">ElevenLabs Scribe v2</div>
+              </div>
+              <div style="background: #1f2937; border-radius: 6px; padding: 0.4rem 0.6rem;">
+                <div style="font-size: 0.55rem; color: #9ca3af;">OUTPUT</div>
+                <div style="font-size: 0.65rem; color: #e5e7eb;">SRT + TXT</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Sidebar + Main Panel</h3>
+      <p>Navigazione a icone sul lato sinistro. Compatta, lascia spazio alla lista file. Stile app desktop moderno.</p>
+    </div>
+  </div>
+
+  <!-- OPTION B: Top nav + centered -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)" style="cursor:pointer;">
+    <div class="card-body" style="padding: 0;">
+      <div style="background: #0d1117; border-radius: 10px 10px 0 0; overflow: hidden; border: 1px solid #21262d;">
+
+        <!-- Top bar -->
+        <div style="background: #161b22; padding: 0.6rem 1rem; display: flex; align-items: center; gap: 0.75rem; border-bottom: 1px solid #21262d;">
+          <div style="width: 10px; height: 10px; border-radius: 50%; background: #ef4444;"></div>
+          <div style="width: 10px; height: 10px; border-radius: 50%; background: #f59e0b;"></div>
+          <div style="width: 10px; height: 10px; border-radius: 50%; background: #10b981;"></div>
+          <span style="font-size: 0.7rem; color: #6b7280; margin-left: 0.5rem;">localhost:8000</span>
+        </div>
+
+        <!-- Top nav -->
+        <div style="background: #161b22; padding: 0.4rem 1rem; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #21262d;">
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span style="font-size: 0.9rem;">🎙</span>
+            <span style="font-size: 0.75rem; font-weight: 600; color: #e6edf3;">Transcriber</span>
+          </div>
+          <div style="display: flex; gap: 1rem;">
+            <span style="font-size: 0.65rem; color: #58a6ff; border-bottom: 2px solid #58a6ff; padding-bottom: 0.2rem;">Transcribe</span>
+            <span style="font-size: 0.65rem; color: #6b7280;">History</span>
+            <span style="font-size: 0.65rem; color: #6b7280;">Settings</span>
+          </div>
+        </div>
+
+        <div style="padding: 0.75rem; height: 280px; overflow: hidden;">
+          <!-- Drop zone grande -->
+          <div style="border: 2px dashed #30363d; border-radius: 10px; padding: 1.2rem; text-align: center; margin-bottom: 0.75rem; background: #161b22;">
+            <div style="font-size: 1.5rem; margin-bottom: 0.3rem;">📁</div>
+            <div style="font-size: 0.7rem; color: #8b949e;">Drop audio files or click to browse</div>
+            <div style="font-size: 0.6rem; color: #484f58; margin-top: 0.2rem;">mp3, m4a, wav, ogg, flac, webm</div>
+          </div>
+
+          <!-- Config row -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.4rem; margin-bottom: 0.6rem;">
+            <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 0.4rem 0.6rem;">
+              <div style="font-size: 0.55rem; color: #8b949e;">PROVIDER</div>
+              <div style="font-size: 0.65rem; color: #e6edf3;">ElevenLabs ▾</div>
+            </div>
+            <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 0.4rem 0.6rem;">
+              <div style="font-size: 0.55rem; color: #8b949e;">MODEL</div>
+              <div style="font-size: 0.65rem; color: #e6edf3;">Scribe v2 ▾</div>
+            </div>
+            <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 0.4rem 0.6rem;">
+              <div style="font-size: 0.55rem; color: #8b949e;">OUTPUT</div>
+              <div style="font-size: 0.65rem; color: #e6edf3;">SRT + TXT ▾</div>
+            </div>
+          </div>
+
+          <!-- Start button + progress -->
+          <div style="background: #1f6feb; border-radius: 6px; padding: 0.4rem; text-align: center; margin-bottom: 0.5rem;">
+            <span style="font-size: 0.7rem; color: white; font-weight: 600;">▶ Start Transcription</span>
+          </div>
+          <div style="background: #161b22; border-radius: 6px; padding: 0.4rem 0.6rem; display: flex; justify-content: space-between; align-items: center;">
+            <div style="font-size: 0.6rem; color: #8b949e;">lecture_01.mp3 — chunk 4/7</div>
+            <div style="font-size: 0.6rem; color: #58a6ff;">67%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Top Nav + Drop Zone Centrale</h3>
+      <p>Navigazione orizzontale in alto. Drop zone prominente. Più simile a una web app moderna, meno compatta.</p>
+    </div>
+  </div>
+
+</div>
+
+<p class="subtitle" style="text-align:center; margin-top:1rem;">Clicca il layout che preferisci — o dimmi in terminale se vuoi qualcosa di diverso.</p>

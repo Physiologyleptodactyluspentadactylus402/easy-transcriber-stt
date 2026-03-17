@@ -1,0 +1,4 @@
+customtkinter>=5.2.2
+pydub>=0.25.1
+python-dotenv>=1.0.1
+openai>=1.50.2
