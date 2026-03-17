@@ -1,0 +1,284 @@
+from __future__ import annotations
+import asyncio
+import json
+import shutil
+import tempfile
+from pathlib import Path
+from fastapi import FastAPI, UploadFile, Form, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi import Request
+from app.settings import Settings
+from app.core.history import History
+from app.core.i18n import load_locale
+from app.core.queue import JobQueue
+from app.providers.base import Job, TranscribeOptions
+from app.providers.openai import OpenAIProvider
+from app.providers.elevenlabs import ElevenLabsProvider
+
+_STATIC_DIR = Path(__file__).parent / "static"
+_TEMPLATES_DIR = Path(__file__).parent / "templates"
+_AUDIO_CHUNKS_DIR = Path(__file__).parent.parent / "audio_chunks"
+
+
+def create_app(
+    settings_path: Path | None = None,
+    db_path: Path | None = None,
+    port: int = 8000,
+) -> FastAPI:
+    settings = Settings(settings_path)
+    history = History(db_path or settings.db_path)
+    queue = JobQueue()
+    templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+
+    def _get_providers() -> dict[str, object]:
+        return {
+            "openai": OpenAIProvider(api_key=settings.openai_api_key),
+            "elevenlabs": ElevenLabsProvider(api_key=settings.elevenlabs_api_key),
+        }
+
+    app = FastAPI(title="Transcriber")
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+    @app.get("/", response_class=HTMLResponse)
+    async def index(request: Request):
+        return templates.TemplateResponse(request, "index.html", {
+            "port": port,
+            "language": settings.language,
+            "wizard_complete": settings.wizard_complete,
+        })
+
+    @app.get("/api/locale")
+    async def get_locale(lang: str = "en"):
+        return load_locale(lang)
+
+    @app.get("/api/providers")
+    async def get_providers():
+        providers = _get_providers()
+        result = []
+        for name, p in providers.items():
+            result.append({
+                "name": name,
+                "available": p.is_available(),
+                "models": [
+                    {
+                        "id": m.id,
+                        "name": m.name,
+                        "description": m.description,
+                        "hardware_hint": m.hardware_hint.value,
+                        "supports_live": m.supports_live,
+                        "supports_speaker_labels": m.supports_speaker_labels,
+                        "supports_timestamps": m.supports_timestamps,
+                    }
+                    for m in p.models
+                ],
+            })
+        return result
+
+    @app.get("/api/settings")
+    async def get_settings():
+        return {
+            "language": settings.language,
+            "output_dir": str(settings.output_dir) if settings.output_dir else None,
+            "chunk_size_sec": settings.chunk_size_sec,
+            "default_provider": settings.default_provider,
+            "default_model": settings.default_model,
+            "default_output_formats": settings.default_output_formats,
+            "wizard_complete": settings.wizard_complete,
+            "openai_key_set": bool(settings.openai_api_key),
+            "elevenlabs_key_set": bool(settings.elevenlabs_api_key),
+        }
+
+    @app.patch("/api/settings")
+    async def update_settings(body: dict):
+        allowed = {
+            "language", "output_dir", "chunk_size_sec",
+            "default_provider", "default_model",
+            "default_output_formats", "wizard_complete",
+        }
+        for key, value in body.items():
+            if key in allowed:
+                setattr(settings, key, value)
+        settings.save()
+        return {"ok": True}
+
+    @app.get("/api/history")
+    async def get_history():
+        return history.list()
+
+    @app.delete("/api/history/{session_id}")
+    async def delete_history(session_id: str):
+        history.delete(session_id)
+        return {"ok": True}
+
+    @app.get("/api/download")
+    async def download_file(path: str):
+        file_path = Path(path)
+        if not file_path.exists():
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(str(file_path), filename=file_path.name)
+
+    @app.post("/api/jobs")
+    async def create_job(
+        files: list[UploadFile],
+        provider_name: str = Form(...),
+        model_id: str = Form(...),
+        output_formats: str = Form('["txt"]'),
+        merge_output: str = Form("false"),
+        prompt: str = Form(""),
+        language: str = Form(""),
+        speaker_labels: str = Form("false"),
+    ):
+        # Save uploaded files to temp dir
+        tmp_dir = Path(tempfile.mkdtemp())
+        saved_files: list[Path] = []
+        for upload in files:
+            dest = tmp_dir / upload.filename
+            dest.write_bytes(await upload.read())
+            saved_files.append(dest)
+
+        opts = TranscribeOptions(
+            language=language or None,
+            prompt=prompt,
+            speaker_labels=speaker_labels.lower() == "true",
+            output_formats=json.loads(output_formats),
+            chunk_size_sec=settings.chunk_size_sec,
+            model_id=model_id,
+        )
+        job = Job(
+            input_files=saved_files,
+            opts=opts,
+            provider_name=provider_name,
+            model_id=model_id,
+            status="pending",
+            merge_output=merge_output.lower() == "true",
+        )
+        queue.add(job)
+
+        # Run job in background
+        asyncio.create_task(_run_job(job, settings, _get_providers(), history, _ws_manager))
+        return {"job_id": job.id}
+
+    # WebSocket connection manager
+    class ConnectionManager:
+        def __init__(self):
+            self.connections: dict[str, set[WebSocket]] = {}
+
+        async def connect(self, ws: WebSocket, job_id: str):
+            # ws is already accepted by the endpoint — just register it
+            self.connections.setdefault(job_id, set()).add(ws)
+
+        def disconnect(self, ws: WebSocket, job_id: str):
+            if job_id in self.connections:
+                self.connections[job_id].discard(ws)  # set.discard is safe
+
+        async def broadcast(self, job_id: str, msg: dict):
+            for ws in list(self.connections.get(job_id, [])):
+                try:
+                    await ws.send_json(msg)
+                except Exception:
+                    pass
+
+    _ws_manager = ConnectionManager()
+
+    @app.websocket("/ws")
+    async def websocket_endpoint(ws: WebSocket):
+        await ws.accept()
+        job_id = None
+        try:
+            while True:
+                data = await ws.receive_json()
+                if data.get("type") == "subscribe":
+                    job_id = data["job_id"]
+                    await _ws_manager.connect(ws, job_id)
+                elif data.get("type") == "cancel" and job_id:
+                    queue.cancel(job_id)
+        except WebSocketDisconnect:
+            if job_id:
+                _ws_manager.disconnect(ws, job_id)
+
+    return app
+
+
+async def _run_job(job: Job, settings: Settings, providers: dict, history: History, ws_manager) -> None:
+    """Execute a transcription job in the background."""
+    import time
+    from app.core.audio import split_audio
+    from app.core.output import format_transcript, merge_transcripts
+
+    async def emit(msg: dict):
+        await ws_manager.broadcast(job.id, msg)
+
+    job.status = "running"
+    await emit({"type": "progress", "job_id": job.id, "progress": 0, "message": "Starting..."})
+
+    try:
+        provider = providers.get(job.provider_name)
+        if not provider or not provider.is_available():
+            raise RuntimeError(f"Provider '{job.provider_name}' is not available.")
+
+        all_results = []
+        chunk_dir = Path("audio_chunks") / job.id
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+
+        for file_idx, input_file in enumerate(job.input_files):
+            await emit({"type": "progress", "job_id": job.id,
+                        "progress": file_idx / len(job.input_files),
+                        "message": f"Splitting {input_file.name}..."})
+
+            file_chunk_dir = chunk_dir / f"file_{file_idx}"
+            chunks = split_audio(input_file, file_chunk_dir, job.opts.chunk_size_sec)
+
+            await emit({"type": "progress", "job_id": job.id,
+                        "progress": (file_idx + 0.3) / len(job.input_files),
+                        "message": f"Transcribing {input_file.name} ({len(chunks)} chunks)..."})
+
+            result = await provider.transcribe_batch(chunks, job.opts)
+            all_results.append((result, input_file.name))
+
+        # Write output files
+        output_files: list[Path] = []
+        output_dir = settings.resolve_output_dir(job.input_files[0] if job.input_files else None)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        base_name = job.input_files[0].stem if len(job.input_files) == 1 else "merged"
+
+        if job.merge_output and len(all_results) > 1:
+            for fmt in job.opts.output_formats:
+                content = merge_transcripts(all_results, fmt)
+                out_path = output_dir / f"{base_name}.{fmt}"
+                out_path.write_text(content, encoding="utf-8")
+                output_files.append(out_path)
+        else:
+            for result, filename in all_results:
+                stem = Path(filename).stem
+                for fmt in job.opts.output_formats:
+                    content = format_transcript(result, fmt)
+                    out_path = output_dir / f"{stem}.{fmt}"
+                    out_path.write_text(content, encoding="utf-8")
+                    output_files.append(out_path)
+
+        # Cleanup chunks
+        shutil.rmtree(str(chunk_dir), ignore_errors=True)
+
+        job.status = "done"
+        job.output_files = output_files
+
+        # Compute total audio duration from the last segment end time across all results
+        total_duration = 0.0
+        for result, _ in all_results:
+            if result.segments:
+                total_duration += result.segments[-1].end
+
+        history.save(job, duration_sec=total_duration)
+
+        await emit({"type": "done", "job_id": job.id,
+                    "output_files": [str(p) for p in output_files]})
+
+    except Exception as e:
+        job.status = "error"
+        job.error_message = str(e)
+        history.save(job, duration_sec=0.0)
+        await emit({"type": "error", "job_id": job.id, "message": str(e), "retryable": False})
