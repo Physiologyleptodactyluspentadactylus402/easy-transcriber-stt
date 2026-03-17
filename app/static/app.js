@@ -45,6 +45,22 @@ function app() {
     installMessage: '',
     installError: null,
 
+    // ── Live mode state ─────────────────────────────────────────
+    liveProviders: [],
+    liveProvider: null,
+    liveModel: null,
+    liveSessionId: null,
+    liveRecording: false,
+    livePaused: false,
+    liveTranscript: [],
+    liveTimer: 0,
+    _liveTimerInterval: null,
+    _mediaRecorder: null,
+    _analyser: null,
+    _animFrame: null,
+    ffmpegAvailable: true,
+    liveSaveAudio: false,
+
     // WebSocket
     _ws: null,
 
@@ -54,6 +70,8 @@ function app() {
       await this.loadSettings();
       await this.loadHistory();
       this._connectWs();
+      await this._checkFfmpeg();
+      this._updateLiveProviders();
     },
 
     async loadProviders() {
@@ -64,6 +82,7 @@ function app() {
         if (this.selectedProvider.models.length)
           this.selectedModel = this.selectedProvider.models[0];
       }
+      this._updateLiveProviders();
     },
 
     async loadSettings() {
@@ -195,6 +214,20 @@ function app() {
         } else {
           this.installError = msg.error || this.t('install_done_error');
         }
+      } else if (msg.type === 'live_session_started') {
+        this.liveSessionId = msg.session_id;
+
+      } else if (msg.type === 'segment') {
+        this.liveTranscript.push({ start: msg.start, end: msg.end, text: msg.text });
+        this.$nextTick(() => {
+          const el = document.getElementById('live-transcript');
+          if (el) el.scrollTop = el.scrollHeight;
+        });
+
+      } else if (msg.type === 'live_session_stopped') {
+        this.liveRecording = false;
+        this.liveSessionId = null;
+        this.liveTranscript = [];
       }
     },
 
@@ -257,6 +290,134 @@ function app() {
         }
         this.selectedProvider = provider.name;
         this.selectedModel = model.id;
+    },
+
+    async _checkFfmpeg() {
+      try {
+        const r = await fetch('/api/ffmpeg');
+        const d = await r.json();
+        this.ffmpegAvailable = d.available;
+      } catch (_) {
+        this.ffmpegAvailable = false;
+      }
+    },
+
+    _updateLiveProviders() {
+      this.liveProviders = this.providers.filter(p =>
+        p.available && p.models.some(m => m.supports_live)
+      );
+      if (this.liveProviders.length) {
+        const first = this.liveProviders[0];
+        this.liveProvider = first;
+        this.liveModel = first.models.find(m => m.supports_live) || null;
+      }
+    },
+
+    async startRecording() {
+      if (!this.liveProvider || !this.liveModel) return;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        this._setupWaveform(stream);
+
+        this._ws.send(JSON.stringify({
+          type: 'start_live',
+          provider_name: this.liveProvider.name,
+          model_id: this.liveModel.id,
+          opts: { language: null, speaker_labels: false, output_formats: ['txt', 'srt'] },
+        }));
+
+        this._mediaRecorder = new MediaRecorder(stream, {
+          mimeType: 'audio/webm;codecs=opus',
+          audioBitsPerSecond: 64000,
+        });
+        this._mediaRecorder.ondataavailable = async (e) => {
+          if (!e.data || e.data.size === 0 || !this.liveSessionId) return;
+          const buf = await e.data.arrayBuffer();
+          const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+          this._ws.send(JSON.stringify({
+            type: 'audio_chunk',
+            session_id: this.liveSessionId,
+            data: b64,
+          }));
+        };
+        this._mediaRecorder.start(3000);
+
+        this.liveRecording = true;
+        this.livePaused = false;
+        this.liveTimer = 0;
+        this._liveTimerInterval = setInterval(() => { this.liveTimer++; }, 1000);
+
+      } catch (err) {
+        console.error('Microphone access denied:', err);
+      }
+    },
+
+    pauseRecording() {
+      if (!this._mediaRecorder) return;
+      if (this.livePaused) {
+        this._mediaRecorder.resume();
+        this.livePaused = false;
+      } else {
+        this._mediaRecorder.pause();
+        this.livePaused = true;
+      }
+    },
+
+    async stopRecording() {
+      if (this._mediaRecorder) {
+        this._mediaRecorder.stop();
+        this._mediaRecorder.stream.getTracks().forEach(t => t.stop());
+        this._mediaRecorder = null;
+      }
+      clearInterval(this._liveTimerInterval);
+      this._liveTimerInterval = null;
+      cancelAnimationFrame(this._animFrame);
+      this._animFrame = null;
+
+      if (this.liveSessionId) {
+        this._ws.send(JSON.stringify({
+          type: 'stop_live',
+          session_id: this.liveSessionId,
+        }));
+      }
+    },
+
+    _setupWaveform(stream) {
+      try {
+        const ctx = new AudioContext();
+        const src = ctx.createMediaStreamSource(stream);
+        this._analyser = ctx.createAnalyser();
+        this._analyser.fftSize = 256;
+        src.connect(this._analyser);
+        this._drawWaveform();
+      } catch (_) {
+        // Web Audio API unavailable — skip waveform
+      }
+    },
+
+    _drawWaveform() {
+      const canvas = document.getElementById('live-waveform');
+      if (!canvas || !this._analyser) return;
+      const ctx = canvas.getContext('2d');
+      const buf = new Uint8Array(this._analyser.frequencyBinCount);
+      const draw = () => {
+        this._animFrame = requestAnimationFrame(draw);
+        this._analyser.getByteFrequencyData(buf);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#6366f1';
+        const bw = canvas.width / buf.length;
+        buf.forEach((v, i) => {
+          const h = (v / 255) * canvas.height;
+          ctx.fillRect(i * bw, canvas.height - h, bw - 1, h);
+        });
+      };
+      draw();
+    },
+
+    _formatLiveTime(secs) {
+      const m = String(Math.floor(secs / 60)).padStart(2, '0');
+      const s = String(secs % 60).padStart(2, '0');
+      return `${m}:${s}`;
     },
 
     hardwareBadgeClass(hint) {

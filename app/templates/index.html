@@ -56,6 +56,15 @@
       <button @click="currentSection='transcribe'"
               :class="currentSection==='transcribe' ? 'active' : ''"
               class="sidebar-icon" title="Transcribe">📂</button>
+      <!-- Live mode nav icon -->
+      <button @click="currentSection='live'"
+              :class="currentSection==='live' ? 'bg-red-600 text-white' : 'text-gray-500 hover:text-gray-300'"
+              class="w-9 h-9 rounded-lg flex items-center justify-center transition-colors"
+              :title="t('nav_live')">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="6"/>
+        </svg>
+      </button>
       <button @click="currentSection='history'"
               :class="currentSection==='history' ? 'active' : ''"
               class="sidebar-icon" title="History">📋</button>
@@ -220,6 +229,103 @@
             ▶ <span x-text="t('transcribe_start')"></span>
           </button>
         </div>
+      </div>
+
+      <!-- ── Live Mode ─────────────────────────────────── -->
+      <div x-show="currentSection === 'live'" x-cloak class="flex flex-col h-full gap-4 px-4 py-4 overflow-y-auto">
+        <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide"
+            x-text="t('live_section_title')"></h2>
+
+        <!-- ffmpeg warning -->
+        <template x-if="!ffmpegAvailable">
+          <div class="bg-yellow-900/40 border border-yellow-700 rounded-lg p-3 text-sm text-yellow-300">
+            <span x-text="t('live_ffmpeg_missing')"></span>
+            <span class="block text-xs text-yellow-500 mt-1" x-text="t('live_ffmpeg_install_hint')"></span>
+          </div>
+        </template>
+
+        <!-- No providers warning -->
+        <template x-if="ffmpegAvailable && liveProviders.length === 0">
+          <div class="bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm text-gray-400"
+               x-text="t('live_no_providers')"></div>
+        </template>
+
+        <template x-if="ffmpegAvailable && liveProviders.length > 0">
+          <div class="flex flex-col gap-4">
+
+            <!-- Provider + model row -->
+            <div class="grid grid-cols-2 gap-2" x-show="!liveRecording">
+              <div>
+                <label class="text-xs text-gray-500 uppercase tracking-wide block mb-1">Provider</label>
+                <select class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200"
+                        @change="liveProvider = liveProviders.find(p => p.name === $event.target.value); liveModel = liveProvider?.models.find(m => m.supports_live)">
+                  <template x-for="p in liveProviders" :key="p.name">
+                    <option :value="p.name" x-text="p.name.replace('_','-')"></option>
+                  </template>
+                </select>
+              </div>
+              <div>
+                <label class="text-xs text-gray-500 uppercase tracking-wide block mb-1">Model</label>
+                <select class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200"
+                        @change="liveModel = liveProvider?.models.find(m => m.id === $event.target.value)">
+                  <template x-for="m in (liveProvider?.models.filter(m => m.supports_live) || [])" :key="m.id">
+                    <option :value="m.id" x-text="m.name"></option>
+                  </template>
+                </select>
+              </div>
+            </div>
+
+            <!-- Waveform canvas -->
+            <canvas id="live-waveform"
+                    width="400" height="60"
+                    class="w-full rounded-lg bg-gray-900"
+                    x-show="liveRecording"></canvas>
+
+            <!-- Timer + recording indicator -->
+            <div x-show="liveRecording" class="flex items-center gap-3">
+              <span class="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></span>
+              <span class="text-sm font-mono text-gray-200" x-text="_formatLiveTime(liveTimer)"></span>
+              <span class="text-xs text-gray-500" x-text="t('live_recording')"></span>
+            </div>
+
+            <!-- Transcript area -->
+            <div id="live-transcript"
+                 class="flex-1 min-h-32 max-h-64 overflow-y-auto bg-gray-900 border border-gray-800 rounded-lg p-3 text-sm text-gray-300 space-y-1.5">
+              <template x-if="liveTranscript.length === 0">
+                <p class="text-gray-600 italic" x-text="t('live_transcript_placeholder')"></p>
+              </template>
+              <template x-for="(seg, i) in liveTranscript" :key="i">
+                <p :class="i === liveTranscript.length - 1 ? 'text-white' : 'text-gray-400'"
+                   x-text="seg.text"></p>
+              </template>
+            </div>
+
+            <!-- Save audio toggle -->
+            <label x-show="!liveRecording" class="flex items-center gap-2 text-sm text-gray-400 cursor-pointer select-none">
+              <input type="checkbox" x-model="liveSaveAudio"
+                     class="w-4 h-4 rounded border-gray-600 bg-gray-800 text-indigo-500 focus:ring-indigo-500">
+              <span x-text="t('live_save_audio_label')"></span>
+            </label>
+
+            <!-- Controls -->
+            <div class="flex gap-3">
+              <template x-if="!liveRecording">
+                <button @click="startRecording()"
+                        class="flex-1 bg-red-600 hover:bg-red-500 text-white text-sm font-medium py-2.5 rounded-lg"
+                        x-text="t('live_start')"></button>
+              </template>
+              <template x-if="liveRecording">
+                <button @click="pauseRecording()"
+                        class="px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg"
+                        x-text="livePaused ? t('live_resume') : t('live_pause')"></button>
+                <button @click="stopRecording()"
+                        class="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium py-2.5 rounded-lg"
+                        x-text="t('live_stop')"></button>
+              </template>
+            </div>
+
+          </div>
+        </template>
       </div>
 
       <!-- HISTORY SECTION -->
