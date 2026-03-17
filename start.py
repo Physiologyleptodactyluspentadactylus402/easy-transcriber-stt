@@ -104,11 +104,22 @@ def main():
     import threading
     threading.Thread(target=open_browser, daemon=True).start()
 
+    # Configure logging so job/install messages appear in terminal
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    # Keep uvicorn quiet (only warnings), but show our app logs
+    logging.getLogger("uvicorn").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
     # Import here so packages are already installed above
     import uvicorn
     from app.main import create_app
     app = create_app(port=port)
-    uvicorn.run(app, host="localhost", port=port, log_level="warning")
+    uvicorn.run(app, host="localhost", port=port, log_level="info")
 
 
 if __name__ == "__main__":

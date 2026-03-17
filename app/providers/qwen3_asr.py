@@ -60,7 +60,8 @@ class Qwen3ASRProvider(BaseProvider):
             progress_callback(0.0, "Installing transformers and torch…")
         subprocess.check_call([
             sys.executable, "-m", "pip", "install",
-            "transformers", "torch", "torchaudio",
+            "git+https://github.com/huggingface/transformers.git",
+            "torch", "torchaudio",
         ])
         # Re-import after install so is_available() returns True
         # without requiring a server restart
@@ -84,6 +85,7 @@ class Qwen3ASRProvider(BaseProvider):
                 pipe_kwargs["torch_dtype"] = dtype
             self._pipe_cache[model_id] = pipeline(
                 "automatic-speech-recognition",
+                trust_remote_code=True,
                 **pipe_kwargs,
             )
         return self._pipe_cache[model_id]

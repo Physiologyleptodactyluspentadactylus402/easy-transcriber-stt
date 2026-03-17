@@ -1,9 +1,12 @@
 from __future__ import annotations
 import asyncio
 import json
+import logging
 import shutil
 import tempfile
 from pathlib import Path
+
+logger = logging.getLogger("transcriber")
 from fastapi import FastAPI, UploadFile, Form, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -338,6 +341,7 @@ async def _run_install(
             "error": None,
         })
     except Exception as exc:
+        logger.error("Install %s failed: %s", provider_name, exc, exc_info=True)
         await ws_manager.broadcast_global({
             "type": "install_done",
             "package": provider_name,
@@ -365,6 +369,8 @@ async def _run_job(job: Job, settings: Settings, providers: dict, history: Histo
         await ws_manager.broadcast(job.id, msg)
 
     job.status = "running"
+    logger.info("Job %s started: provider=%s model=%s files=%d",
+                job.id, job.provider_name, job.model_id, len(job.input_files))
     await emit({"type": "progress", "job_id": job.id, "progress": 0, "message": "Starting..."})
 
     chunk_dir = Path("audio_chunks") / job.id
@@ -436,10 +442,12 @@ async def _run_job(job: Job, settings: Settings, providers: dict, history: Histo
 
         history.save(job, duration_sec=total_duration)
 
+        logger.info("Job %s done: %d output files", job.id, len(output_files))
         await emit({"type": "done", "job_id": job.id,
                     "output_files": [str(p) for p in output_files]})
 
     except Exception as e:
+        logger.error("Job %s failed: %s", job.id, e, exc_info=True)
         job.status = "error"
         job.error_message = str(e)
         history.save(job, duration_sec=0.0)
