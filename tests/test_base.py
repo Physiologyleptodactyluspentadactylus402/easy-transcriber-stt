@@ -50,3 +50,15 @@ def test_transcribe_options_model_id_default():
 def test_base_provider_is_abstract():
     with pytest.raises(TypeError):
         BaseProvider()  # cannot instantiate abstract class
+
+
+from app.providers.openai import OpenAIProvider
+from app.providers.elevenlabs import ElevenLabsProvider
+
+def test_openai_install_deps_accepts_callback():
+    p = OpenAIProvider(api_key="sk-x")
+    p.install_deps(progress_callback=lambda prog, msg: None)  # must not raise
+
+def test_elevenlabs_install_deps_accepts_callback():
+    p = ElevenLabsProvider(api_key="el-x")
+    p.install_deps(progress_callback=lambda prog, msg: None)  # must not raise

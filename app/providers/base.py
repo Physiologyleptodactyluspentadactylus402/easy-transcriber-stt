@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import AsyncGenerator, Literal
+from typing import AsyncGenerator, Callable, Literal
 import time
 import uuid
 
@@ -77,7 +77,10 @@ class BaseProvider(ABC):
         """Return True if this provider can run right now."""
 
     @abstractmethod
-    def install_deps(self) -> None:
+    def install_deps(
+        self,
+        progress_callback: "Callable[[float, str], None] | None" = None,
+    ) -> None:
         """Install heavy dependencies. May take minutes. Called from GUI."""
 
     @abstractmethod

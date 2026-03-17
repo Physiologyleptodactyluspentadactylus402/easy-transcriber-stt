@@ -1,5 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
+from typing import Callable
 
 try:
     from openai import OpenAI
@@ -45,7 +46,10 @@ class OpenAIProvider(BaseProvider):
     def is_available(self) -> bool:
         return bool(self._api_key)
 
-    def install_deps(self) -> None:
+    def install_deps(
+        self,
+        progress_callback: "Callable[[float, str], None] | None" = None,
+    ) -> None:
         pass  # No heavy deps required
 
     async def transcribe_batch(
