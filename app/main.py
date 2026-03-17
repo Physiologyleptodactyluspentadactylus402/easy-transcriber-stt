@@ -114,9 +114,15 @@ def create_app(
 
     @app.get("/api/download")
     async def download_file(path: str):
-        file_path = Path(path)
+        from fastapi import HTTPException
+        file_path = Path(path).resolve()
+        # Only serve files within known output roots (prevent path traversal)
+        allowed_roots = [*(
+            [settings.output_dir.resolve()] if settings.output_dir else []
+        ), (Path.home() / "Documents" / "Transcriber").resolve()]
+        if not any(_path_within(file_path, root) for root in allowed_roots):
+            raise HTTPException(status_code=403, detail="Access denied")
         if not file_path.exists():
-            from fastapi import HTTPException
             raise HTTPException(status_code=404, detail="File not found")
         return FileResponse(str(file_path), filename=file_path.name)
 
@@ -202,6 +208,15 @@ def create_app(
     return app
 
 
+def _path_within(path: Path, root: Path) -> bool:
+    """Return True if path is inside root (prevents path traversal)."""
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 async def _run_job(job: Job, settings: Settings, providers: dict, history: History, ws_manager) -> None:
     """Execute a transcription job in the background."""
     import time
@@ -214,16 +229,20 @@ async def _run_job(job: Job, settings: Settings, providers: dict, history: Histo
     job.status = "running"
     await emit({"type": "progress", "job_id": job.id, "progress": 0, "message": "Starting..."})
 
+    chunk_dir = Path("audio_chunks") / job.id
     try:
         provider = providers.get(job.provider_name)
         if not provider or not provider.is_available():
             raise RuntimeError(f"Provider '{job.provider_name}' is not available.")
 
         all_results = []
-        chunk_dir = Path("audio_chunks") / job.id
         chunk_dir.mkdir(parents=True, exist_ok=True)
 
         for file_idx, input_file in enumerate(job.input_files):
+            if job.status == "cancelled":
+                await emit({"type": "error", "job_id": job.id, "message": "Cancelled", "retryable": False})
+                return
+
             await emit({"type": "progress", "job_id": job.id,
                         "progress": file_idx / len(job.input_files),
                         "message": f"Splitting {input_file.name}..."})
@@ -231,12 +250,20 @@ async def _run_job(job: Job, settings: Settings, providers: dict, history: Histo
             file_chunk_dir = chunk_dir / f"file_{file_idx}"
             chunks = split_audio(input_file, file_chunk_dir, job.opts.chunk_size_sec)
 
+            if job.status == "cancelled":
+                await emit({"type": "error", "job_id": job.id, "message": "Cancelled", "retryable": False})
+                return
+
             await emit({"type": "progress", "job_id": job.id,
                         "progress": (file_idx + 0.3) / len(job.input_files),
                         "message": f"Transcribing {input_file.name} ({len(chunks)} chunks)..."})
 
             result = await provider.transcribe_batch(chunks, job.opts)
             all_results.append((result, input_file.name))
+
+        if job.status == "cancelled":
+            await emit({"type": "error", "job_id": job.id, "message": "Cancelled", "retryable": False})
+            return
 
         # Write output files
         output_files: list[Path] = []
@@ -260,9 +287,6 @@ async def _run_job(job: Job, settings: Settings, providers: dict, history: Histo
                     out_path.write_text(content, encoding="utf-8")
                     output_files.append(out_path)
 
-        # Cleanup chunks
-        shutil.rmtree(str(chunk_dir), ignore_errors=True)
-
         job.status = "done"
         job.output_files = output_files
 
@@ -282,3 +306,9 @@ async def _run_job(job: Job, settings: Settings, providers: dict, history: Histo
         job.error_message = str(e)
         history.save(job, duration_sec=0.0)
         await emit({"type": "error", "job_id": job.id, "message": str(e), "retryable": False})
+
+    finally:
+        # Clean up audio chunks and uploaded temp files
+        shutil.rmtree(str(chunk_dir), ignore_errors=True)
+        if job.input_files:
+            shutil.rmtree(str(job.input_files[0].parent), ignore_errors=True)

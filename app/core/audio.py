@@ -50,8 +50,5 @@ def split_audio(
 
         chunk_num += 1
         start_ms += step_ms
-        # Don't continue if the remaining audio is smaller than a full chunk
-        if total_ms - end_ms < chunk_ms:
-            break
 
     return chunks
