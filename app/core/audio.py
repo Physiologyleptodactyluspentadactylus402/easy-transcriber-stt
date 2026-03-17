@@ -48,19 +48,10 @@ def split_audio(
         chunk.export(str(filename), format="mp3", bitrate="192k")
         chunks.append(filename)
 
-        # If this chunk reaches the end, stop
-        if end_ms >= total_ms:
-            break
-
-        # Check if the next chunk would be too small before continuing
-        next_start_ms = start_ms + step_ms
-        next_end_ms = min(next_start_ms + chunk_ms, total_ms)
-        next_duration_ms = next_end_ms - next_start_ms
-
-        if next_duration_ms < chunk_ms * 0.1:  # Skip if next chunk would be < 10% of full size
-            break
-
         chunk_num += 1
-        start_ms = next_start_ms
+        start_ms += step_ms
+        # Don't continue if the remaining audio is smaller than a full chunk
+        if total_ms - end_ms < chunk_ms:
+            break
 
     return chunks
