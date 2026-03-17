@@ -33,9 +33,15 @@ def create_app(
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
     def _get_providers() -> dict[str, object]:
+        from app.providers.faster_whisper import FasterWhisperProvider
+        from app.providers.qwen3_asr import Qwen3ASRProvider
+        from app.providers.ollama import OllamaProvider
         return {
             "openai": OpenAIProvider(api_key=settings.openai_api_key),
             "elevenlabs": ElevenLabsProvider(api_key=settings.elevenlabs_api_key),
+            "faster_whisper": FasterWhisperProvider(),
+            "qwen3_asr": Qwen3ASRProvider(),
+            "ollama": OllamaProvider(),
         }
 
     app = FastAPI(title="Transcriber")
@@ -112,6 +118,18 @@ def create_app(
         history.delete(session_id)
         return {"ok": True}
 
+    @app.post("/api/install/{provider_name}")
+    async def install_provider(provider_name: str):
+        from fastapi import HTTPException
+        providers = _get_providers()
+        provider = providers.get(provider_name)
+        if provider is None:
+            raise HTTPException(status_code=404, detail="Provider not found")
+        asyncio.create_task(
+            _run_install(provider_name, provider, _ws_manager)
+        )
+        return {"ok": True}
+
     @app.get("/api/download")
     async def download_file(path: str):
         from fastapi import HTTPException
@@ -170,18 +188,32 @@ def create_app(
     # WebSocket connection manager
     class ConnectionManager:
         def __init__(self):
-            self.connections: dict[str, set[WebSocket]] = {}
+            self.all_connections: set[WebSocket] = set()
+            self.job_connections: dict[str, set[WebSocket]] = {}
 
-        async def connect(self, ws: WebSocket, job_id: str):
-            # ws is already accepted by the endpoint — just register it
-            self.connections.setdefault(job_id, set()).add(ws)
+        async def connect(self, ws: WebSocket) -> None:
+            """Register a new connection globally (before any job subscription)."""
+            self.all_connections.add(ws)
 
-        def disconnect(self, ws: WebSocket, job_id: str):
-            if job_id in self.connections:
-                self.connections[job_id].discard(ws)  # set.discard is safe
+        def subscribe(self, ws: WebSocket, job_id: str) -> None:
+            """Subscribe a connection to a specific job's updates."""
+            self.job_connections.setdefault(job_id, set()).add(ws)
 
-        async def broadcast(self, job_id: str, msg: dict):
-            for ws in list(self.connections.get(job_id, [])):
+        def disconnect(self, ws: WebSocket, job_id: str | None = None) -> None:
+            self.all_connections.discard(ws)
+            if job_id and job_id in self.job_connections:
+                self.job_connections[job_id].discard(ws)
+
+        async def broadcast(self, job_id: str, msg: dict) -> None:
+            for ws in list(self.job_connections.get(job_id, [])):
+                try:
+                    await ws.send_json(msg)
+                except Exception:
+                    pass
+
+        async def broadcast_global(self, msg: dict) -> None:
+            """Send a message to every connected WebSocket (e.g. install progress)."""
+            for ws in list(self.all_connections):
                 try:
                     await ws.send_json(msg)
                 except Exception:
@@ -192,20 +224,58 @@ def create_app(
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
         await ws.accept()
+        await _ws_manager.connect(ws)   # register globally
         job_id = None
         try:
             while True:
                 data = await ws.receive_json()
                 if data.get("type") == "subscribe":
                     job_id = data["job_id"]
-                    await _ws_manager.connect(ws, job_id)
+                    _ws_manager.subscribe(ws, job_id)   # subscribe to job updates
                 elif data.get("type") == "cancel" and job_id:
                     queue.cancel(job_id)
         except WebSocketDisconnect:
-            if job_id:
-                _ws_manager.disconnect(ws, job_id)
+            _ws_manager.disconnect(ws, job_id)
 
     return app
+
+
+async def _run_install(
+    provider_name: str,
+    provider: object,
+    ws_manager,
+) -> None:
+    """Run provider.install_deps() in a thread pool and stream progress via WebSocket."""
+    loop = asyncio.get_running_loop()
+
+    def _progress(prog: float, msg: str) -> None:
+        loop.call_soon_threadsafe(
+            asyncio.ensure_future,
+            ws_manager.broadcast_global({
+                "type": "install_progress",
+                "package": provider_name,
+                "progress": prog,
+                "message": msg,
+            }),
+        )
+
+    try:
+        await loop.run_in_executor(
+            None, lambda: provider.install_deps(progress_callback=_progress)
+        )
+        await ws_manager.broadcast_global({
+            "type": "install_done",
+            "package": provider_name,
+            "success": True,
+            "error": None,
+        })
+    except Exception as exc:
+        await ws_manager.broadcast_global({
+            "type": "install_done",
+            "package": provider_name,
+            "success": False,
+            "error": str(exc),
+        })
 
 
 def _path_within(path: Path, root: Path) -> bool:

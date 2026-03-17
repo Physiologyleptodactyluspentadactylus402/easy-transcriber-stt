@@ -73,3 +73,36 @@ def test_upload_and_queue_job(client, tmp_path):
         )
     assert r.status_code == 200
     assert "job_id" in r.json()
+
+
+def test_providers_endpoint_includes_local(client):
+    r = client.get("/api/providers")
+    assert r.status_code == 200
+    names = [p["name"] for p in r.json()]
+    assert "faster_whisper" in names
+    assert "qwen3_asr" in names
+    assert "ollama" in names
+
+
+def test_install_unknown_provider_returns_404(client):
+    r = client.post("/api/install/nonexistent")
+    assert r.status_code == 404
+
+
+def test_install_known_provider_returns_200(client):
+    r = client.post("/api/install/faster_whisper")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+def test_ws_global_connection_tracked(tmp_path):
+    """Every WebSocket connection is registered globally (for broadcast_global)."""
+    from app.main import create_app
+    app = create_app(settings_path=tmp_path / "s.json", db_path=tmp_path / "db.db")
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    # Open a WebSocket without subscribing to any job — must not error
+    with client.websocket_connect("/ws") as ws:
+        # Send a non-subscribe message — server should handle without crashing
+        ws.send_json({"type": "ping"})
+        # No response expected, just verify no exception and connection stays open
