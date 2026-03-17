@@ -230,6 +230,8 @@ function app() {
         this.liveSessionId = null;
         this.liveTranscript = [];
         this.liveTimer = 0;
+        clearInterval(this._liveTimerInterval);
+        this._liveTimerInterval = null;
       }
     },
 

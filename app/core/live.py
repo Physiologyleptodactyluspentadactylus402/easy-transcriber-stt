@@ -64,7 +64,7 @@ class LiveSession:
                 await self._transcribe_buffer(buf_snapshot, ws_manager)
             if time.time() - self._last_save >= 30:
                 self._save_incremental_txt()
-                self._save_incremental_webm(buf_snapshot)
+                self._save_incremental_webm(bytes(self._buffer))
                 self._last_save = time.time()
 
     async def _transcribe_buffer(self, buf_bytes: bytes, ws_manager) -> None:
