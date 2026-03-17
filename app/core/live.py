@@ -58,13 +58,13 @@ class LiveSession:
         threshold = _BUFFER_SECS * _BYTES_PER_SEC
         while not self._stopped:
             await asyncio.sleep(1.0)
-            if len(self._buffer) >= threshold:
-                data = bytes(self._buffer)
+            buf_snapshot = bytes(self._buffer)
+            if len(buf_snapshot) >= threshold:
                 self._buffer.clear()
-                await self._transcribe_buffer(data, ws_manager)
+                await self._transcribe_buffer(buf_snapshot, ws_manager)
             if time.time() - self._last_save >= 30:
                 self._save_incremental_txt()
-                self._save_incremental_webm(bytes(self._buffer))
+                self._save_incremental_webm(buf_snapshot)
                 self._last_save = time.time()
 
     async def _transcribe_buffer(self, buf_bytes: bytes, ws_manager) -> None:

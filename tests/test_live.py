@@ -85,3 +85,11 @@ async def test_live_session_incremental_save(tmp_path):
     txt = tmp_path / "s3_live.txt"
     assert txt.exists()
     assert "Test." in txt.read_text(encoding="utf-8")
+
+
+def test_live_session_incremental_save_webm(tmp_path):
+    s = LiveSession("s4", _mock_provider(), TranscribeOptions(output_formats=["txt"]), tmp_path)
+    s._save_incremental_webm(b"fakebytes")
+    webm = tmp_path / "s4_live.webm"
+    assert webm.exists()
+    assert webm.read_bytes() == b"fakebytes"
