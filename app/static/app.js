@@ -421,7 +421,7 @@ function app() {
       };
       const sizes = {
         demucs: '~2 GB (includes PyTorch)',
-        deepfilter: '~200 MB (requires Rust toolchain)',
+        deepfilter: '~200 MB — requires Rust compiler (rustup.rs)',
       };
       this.installModal = {
         providerName: toolName,

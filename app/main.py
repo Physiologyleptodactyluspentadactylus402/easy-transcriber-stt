@@ -169,7 +169,7 @@ def create_app(
 
     _AUDIOLAB_PACKAGES = {
         "demucs": {"pip": "demucs>=4.0.0", "label": "Demucs", "size": "~2 GB (includes PyTorch)"},
-        "deepfilter": {"pip": "deepfilternet>=0.5.0", "label": "DeepFilterNet", "size": "~200 MB (requires Rust toolchain)"},
+        "deepfilter": {"pip": "deepfilternet>=0.5.0", "label": "DeepFilterNet", "size": "~200 MB — requires Rust compiler (rustup.rs)"},
     }
 
     @app.post("/api/audiolab/install/{tool_name}")
@@ -668,11 +668,15 @@ async def _run_audiolab_install(
             bufsize=1,  # line-buffered
         )
         lines_seen = 0
+        last_lines = []  # keep last few lines for error diagnosis
         for line in proc.stdout:
             lines_seen += 1
             line = line.strip()
             if not line:
                 continue
+            last_lines.append(line)
+            if len(last_lines) > 10:
+                last_lines.pop(0)
             # Show the user what pip is doing (download, install, etc.)
             # Progress goes from 0.05 → 0.85, proportional to output lines
             frac = min(0.05 + lines_seen * 0.02, 0.85)
@@ -680,7 +684,17 @@ async def _run_audiolab_install(
 
         returncode = proc.wait()
         if returncode != 0:
-            raise RuntimeError(f"pip install failed (exit code {returncode})")
+            # Build a helpful error message from pip output
+            output_tail = "\n".join(last_lines[-5:])
+            if "cargo" in output_tail.lower() or "rust" in output_tail.lower():
+                raise RuntimeError(
+                    f"DeepFilterNet requires the Rust compiler to build.\n"
+                    f"Install Rust from https://rustup.rs and restart, "
+                    f"then try again."
+                )
+            raise RuntimeError(
+                f"pip install failed (exit code {returncode}):\n{output_tail}"
+            )
 
         _send(0.9, "Verifying import...")
 
