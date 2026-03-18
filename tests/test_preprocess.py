@@ -6,7 +6,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from app.core.preprocess import analyze_lufs, apply_loudnorm, apply_voice_isolation, decode_to_wav
+from app.core.preprocess import analyze_lufs, apply_denoise, apply_loudnorm, apply_voice_isolation, decode_to_wav
 
 
 # ---------------------------------------------------------------------------
@@ -206,3 +206,50 @@ class TestApplyVoiceIsolation:
         with patch("app.core.preprocess._DEMUCS_AVAILABLE", False):
             with pytest.raises(RuntimeError, match="[Dd]emucs"):
                 apply_voice_isolation(wav_in, tmp_path / "out.wav")
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — apply_denoise
+# ---------------------------------------------------------------------------
+
+
+class TestApplyDenoise:
+    def test_output_file_is_created(self, tmp_path):
+        from pydub import AudioSegment
+        from pydub.generators import Sine
+        tone = Sine(440).to_audio_segment(duration=2000)
+        wav_in = tmp_path / "input_48k.wav"
+        tone.export(str(wav_in), format="wav", parameters=["-ar", "48000"])
+        wav_out = tmp_path / "denoised.wav"
+
+        with patch("app.core.preprocess._DEEPFILTER_AVAILABLE", True), \
+             patch("app.core.preprocess._run_deepfilter") as mock_run:
+            mock_run.return_value = np.zeros(2 * 48000, dtype=np.float32)
+            result = apply_denoise(wav_in, wav_out)
+
+        assert result.exists()
+
+    def test_output_is_48k(self, tmp_path):
+        from pydub import AudioSegment
+        from pydub.generators import Sine
+        tone = Sine(440).to_audio_segment(duration=2000)
+        wav_in = tmp_path / "input_48k.wav"
+        tone.export(str(wav_in), format="wav", parameters=["-ar", "48000"])
+        wav_out = tmp_path / "denoised.wav"
+
+        with patch("app.core.preprocess._DEEPFILTER_AVAILABLE", True), \
+             patch("app.core.preprocess._run_deepfilter") as mock_run:
+            mock_run.return_value = np.zeros(2 * 48000, dtype=np.float32)
+            apply_denoise(wav_in, wav_out)
+
+        seg = AudioSegment.from_wav(str(wav_out))
+        assert seg.frame_rate == 48000
+
+    def test_raises_when_deepfilter_unavailable(self, tmp_path):
+        from pydub import AudioSegment
+        wav_in = tmp_path / "input.wav"
+        AudioSegment.silent(duration=1000).export(str(wav_in), format="wav")
+
+        with patch("app.core.preprocess._DEEPFILTER_AVAILABLE", False):
+            with pytest.raises(RuntimeError, match="[Dd]eep[Ff]ilter"):
+                apply_denoise(wav_in, tmp_path / "out.wav")

@@ -33,6 +33,14 @@ except ImportError:
 
 _demucs_model_cache = {}
 
+try:
+    from df.enhance import enhance, init_df, load_audio, save_audio
+    _DEEPFILTER_AVAILABLE = True
+except ImportError:
+    _DEEPFILTER_AVAILABLE = False
+
+_deepfilter_cache = {}
+
 logger = logging.getLogger("transcriber.preprocess")
 
 
@@ -390,4 +398,45 @@ def apply_voice_isolation(
     vocals_np_48k = vocals_48k.squeeze(0).numpy()
     sf.write(str(output_path), vocals_np_48k, 48000, subtype="PCM_16")
     logger.info("Voice isolation: %s → %s", wav_path.name, output_path.name)
+    return output_path.resolve()
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — noise reduction (DeepFilterNet)
+# ---------------------------------------------------------------------------
+
+
+def _run_deepfilter(wav_path: Path) -> np.ndarray:
+    """Run DeepFilterNet and return enhanced audio as numpy array at 48kHz."""
+    if not _DEEPFILTER_AVAILABLE:
+        raise RuntimeError("DeepFilterNet is not installed.")
+
+    if "model" not in _deepfilter_cache:
+        model, df_state, _ = init_df()
+        _deepfilter_cache["model"] = model
+        _deepfilter_cache["df_state"] = df_state
+
+    model = _deepfilter_cache["model"]
+    df_state = _deepfilter_cache["df_state"]
+
+    audio, _ = load_audio(str(wav_path), sr=df_state.sr())
+    enhanced = enhance(model, df_state, audio)
+    return enhanced.numpy().flatten()
+
+
+def apply_denoise(
+    wav_path: Path,
+    output_path: Path,
+) -> Path:
+    """Apply DeepFilterNet noise reduction. Input must be 48kHz WAV."""
+    if not _DEEPFILTER_AVAILABLE:
+        raise RuntimeError(
+            "DeepFilterNet is not installed. Install it with: pip install deepfilternet"
+        )
+
+    enhanced_np = _run_deepfilter(wav_path)
+
+    # Save as 16-bit WAV at 48kHz using soundfile
+    sf.write(str(output_path), enhanced_np, 48000, subtype="PCM_16")
+    logger.info("Denoise: %s → %s", wav_path.name, output_path.name)
     return output_path.resolve()
