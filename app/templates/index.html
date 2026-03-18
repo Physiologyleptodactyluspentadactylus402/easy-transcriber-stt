@@ -719,8 +719,7 @@
 
       <div class="flex gap-3 justify-end">
         <button @click="closeInstallModal()"
-                :disabled="installing"
-                class="px-4 py-2 text-sm text-gray-400 hover:text-white disabled:opacity-40"
+                class="px-4 py-2 text-sm text-gray-400 hover:text-white"
                 x-text="t('install_cancel')"></button>
         <button @click="confirmInstall()"
                 :disabled="installing"

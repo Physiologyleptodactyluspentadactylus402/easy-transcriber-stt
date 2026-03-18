@@ -635,32 +635,54 @@ async def _run_audiolab_install(
     pkg: dict,
     ws_manager,
 ) -> None:
-    """Install an Audio Lab dependency (demucs / deepfilter) via pip."""
+    """Install an Audio Lab dependency (demucs / deepfilter) via pip.
+
+    Streams pip output line-by-line so the user sees real download progress
+    instead of a frozen spinner.  Uses Popen (not check_call) to avoid the
+    classic deadlock where an unread stderr pipe fills its 64 KB buffer.
+    """
     import subprocess, sys
     loop = asyncio.get_running_loop()
 
-    def _do_install():
-        ws_manager_ref = ws_manager
-        _loop = loop
-
-        def _progress(prog, msg):
-            _loop.call_soon_threadsafe(
-                asyncio.ensure_future,
-                ws_manager_ref.broadcast_global({
-                    "type": "install_progress",
-                    "package": tool_name,
-                    "progress": prog,
-                    "message": msg,
-                }),
-            )
-
-        _progress(0.1, f"Installing {pkg['label']}...")
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", pkg["pip"]],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+    def _send(prog, msg):
+        loop.call_soon_threadsafe(
+            asyncio.ensure_future,
+            ws_manager.broadcast_global({
+                "type": "install_progress",
+                "package": tool_name,
+                "progress": prog,
+                "message": msg,
+            }),
         )
-        _progress(0.9, "Verifying import...")
+
+    def _do_install():
+        _send(0.05, f"Installing {pkg['label']}...")
+
+        # Stream pip output line-by-line for real progress updates
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "pip", "install", pkg["pip"],
+             "--progress-bar=off"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # merge stderr into stdout to avoid deadlock
+            text=True,
+            bufsize=1,  # line-buffered
+        )
+        lines_seen = 0
+        for line in proc.stdout:
+            lines_seen += 1
+            line = line.strip()
+            if not line:
+                continue
+            # Show the user what pip is doing (download, install, etc.)
+            # Progress goes from 0.05 → 0.85, proportional to output lines
+            frac = min(0.05 + lines_seen * 0.02, 0.85)
+            _send(frac, line[:120])  # truncate very long lines
+
+        returncode = proc.wait()
+        if returncode != 0:
+            raise RuntimeError(f"pip install failed (exit code {returncode})")
+
+        _send(0.9, "Verifying import...")
 
         # Re-check availability after install
         import importlib
@@ -669,7 +691,7 @@ async def _run_audiolab_install(
         elif tool_name == "deepfilter":
             importlib.import_module("df")
 
-        _progress(1.0, "Done")
+        _send(1.0, "Done")
 
     try:
         await loop.run_in_executor(None, _do_install)
