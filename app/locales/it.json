@@ -5,7 +5,7 @@
   "nav_settings": "Impostazioni",
   "transcribe_drop_prompt": "Trascina file audio qui oppure",
   "transcribe_drop_browse": "sfoglia",
-  "transcribe_drop_formats": "mp3 · m4a · wav · ogg · flac · webm",
+  "transcribe_drop_formats": "mp3 · m4a · mp4 · wav · ogg · flac · webm · aac · wma · opus",
   "transcribe_provider": "Provider",
   "transcribe_model": "Modello",
   "transcribe_output": "Formati di output",

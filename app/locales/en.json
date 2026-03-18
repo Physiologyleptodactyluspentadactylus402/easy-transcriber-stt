@@ -5,7 +5,7 @@
   "nav_settings": "Settings",
   "transcribe_drop_prompt": "Drop audio files here or",
   "transcribe_drop_browse": "browse",
-  "transcribe_drop_formats": "mp3 · m4a · wav · ogg · flac · webm",
+  "transcribe_drop_formats": "mp3 · m4a · mp4 · wav · ogg · flac · webm · aac · wma · opus",
   "transcribe_provider": "Provider",
   "transcribe_model": "Model",
   "transcribe_output": "Output formats",
