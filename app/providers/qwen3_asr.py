@@ -172,10 +172,22 @@ class Qwen3ASRProvider(BaseProvider):
                 kwargs["dtype"] = dtype
 
             logger.info("Loading Qwen3-ASR model %s on %s (dtype=%s) …", hf_id, device_map, dtype)
-            self._model_cache[model_id] = Qwen3ASRModel.from_pretrained(
+            model = Qwen3ASRModel.from_pretrained(
                 hf_id, **kwargs,
             )
             logger.info("Qwen3-ASR model %s loaded", hf_id)
+
+            # torch.compile: JIT-optimize the model for the target device.
+            # First transcribe() call will be slower (compilation), but
+            # subsequent calls benefit from fused kernels and reduced overhead.
+            if torch is not None and device_map != "cpu":
+                try:
+                    model.model = torch.compile(model.model)
+                    logger.info("torch.compile applied — first chunk will compile")
+                except Exception as exc:
+                    logger.warning("torch.compile failed, running unoptimized: %s", exc)
+
+            self._model_cache[model_id] = model
         return self._model_cache[model_id]
 
     async def transcribe_batch(
