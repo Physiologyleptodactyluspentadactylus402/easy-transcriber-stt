@@ -70,7 +70,11 @@ def _apply_denoise_ffmpeg(wav_path: Path, output_path: Path) -> Path:
         "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le",
         str(output_path),
     ]
-    subprocess.run(cmd, capture_output=True, check=True)
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        stderr_text = result.stderr.decode(errors="replace")
+        logger.error("ffmpeg afftdn failed: %s", stderr_text)
+        raise RuntimeError(f"ffmpeg denoise failed: {stderr_text}")
     logger.info("Denoise (ffmpeg): %s → %s", wav_path.name, output_path.name)
     return output_path.resolve()
 ```
@@ -158,9 +162,10 @@ alDenoiseEngine: "ffmpeg",  // "ffmpeg" or "deepfilter" — global preference
 
 #### Persistence
 
-`alDenoiseEngine` is saved/loaded from settings (existing `/api/settings` mechanism) so it persists across sessions. This requires:
-- Adding `"denoise_engine"` to the `allowed` set in `PATCH /api/settings` (in `app/main.py`)
-- Including `denoise_engine` in the `GET /api/settings` response with default `"ffmpeg"`
+`alDenoiseEngine` is saved/loaded from settings (existing `/api/settings` mechanism) so it persists across sessions. This requires three coordinated changes:
+- **`app/settings.py`**: Add `self.denoise_engine: str = data.get("denoise_engine", "ffmpeg")` in `__init__`, and `"denoise_engine": self.denoise_engine` in `save()`'s data dict
+- **`app/main.py` `GET /api/settings`**: Include `"denoise_engine": settings.denoise_engine` in the response
+- **`app/main.py` `PATCH /api/settings`**: Add `"denoise_engine"` to the `allowed` set
 
 #### `alProcess()` change
 
@@ -284,7 +289,7 @@ The "Install DeepFilterNet" button in the modal triggers the existing `/api/audi
 }
 ```
 
-**Note:** The existing `audiolab_denoise` key is updated to remove the "(DeepFilterNet)" parenthetical since the engine is now selectable separately.
+**Note:** The `audiolab_denoise` key is included above with its updated value (removing the old "(DeepFilterNet)" parenthetical). Both `en.json` and `it.json` must have this key updated, not just the new keys added.
 
 ## 7. Tests
 
@@ -309,7 +314,8 @@ Existing `TestApplyDenoise` tests are updated to use `engine="deepfilter"` expli
 | File | Change |
 |------|--------|
 | `app/core/preprocess.py` | Add `_apply_denoise_ffmpeg()`, refactor `apply_denoise()` as dispatcher, add `denoise_engine` to `PreprocessConfig` |
-| `app/main.py` | Add `denoise_engine` form param to `/api/audiolab/process`, add `denoise_engine` to settings allowlist |
+| `app/settings.py` | Add `denoise_engine` field to Settings class (init, save) |
+| `app/main.py` | Add `denoise_engine` form param to `/api/audiolab/process`, add to settings allowlist and GET response |
 | `app/templates/index.html` | Add engine selector pills, install guide modal, "How to install" link |
 | `app/static/app.js` | Add `alDenoiseEngine` state, `alShowInstallGuide()`, persist engine preference |
 | `app/locales/en.json` | Add ~13 new denoise engine/guide strings |
