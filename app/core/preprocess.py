@@ -20,9 +20,9 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import soundfile as sf
 
 try:
-    import soundfile as sf
     import torch
     import torchaudio
     from demucs.pretrained import get_model
@@ -390,4 +390,4 @@ def apply_voice_isolation(
     vocals_np_48k = vocals_48k.squeeze(0).numpy()
     sf.write(str(output_path), vocals_np_48k, 48000, subtype="PCM_16")
     logger.info("Voice isolation: %s → %s", wav_path.name, output_path.name)
-    return output_path
+    return output_path.resolve()
