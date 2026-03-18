@@ -1,10 +1,12 @@
-"""Tests for app.core.preprocess — decode_to_wav, analyze_lufs, apply_loudnorm."""
+"""Tests for app.core.preprocess — decode_to_wav, analyze_lufs, apply_loudnorm, apply_voice_isolation."""
 import wave
 from pathlib import Path
+from unittest.mock import patch
 
+import numpy as np
 import pytest
 
-from app.core.preprocess import analyze_lufs, apply_loudnorm, decode_to_wav
+from app.core.preprocess import analyze_lufs, apply_loudnorm, apply_voice_isolation, decode_to_wav
 
 
 # ---------------------------------------------------------------------------
@@ -150,3 +152,57 @@ class TestApplyLoudnorm:
         apply_loudnorm(wav_in, wav_out, target_lufs=target)
         result = analyze_lufs(wav_out)
         assert abs(result["input_i"] - target) < 2.0
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — apply_voice_isolation
+# ---------------------------------------------------------------------------
+
+
+class TestApplyVoiceIsolation:
+    def test_output_file_is_created(self, tmp_path):
+        from pydub import AudioSegment
+        from pydub.generators import Sine
+        tone = Sine(440).to_audio_segment(duration=2000)
+        wav_in = tmp_path / "input.wav"
+        tone.export(str(wav_in), format="wav")
+        wav_out = tmp_path / "vocals.wav"
+
+        # Mock demucs to avoid downloading the model
+        num_samples = 2 * 44100  # 2s at 44.1kHz (demucs native rate)
+        vocals_np = np.sin(np.linspace(0, 440 * 2 * np.pi * 2, num_samples)).astype(np.float32)
+
+        with patch("app.core.preprocess._DEMUCS_AVAILABLE", True), \
+             patch("app.core.preprocess._run_demucs") as mock_run:
+            mock_run.return_value = vocals_np
+            result = apply_voice_isolation(wav_in, wav_out)
+
+        assert result.exists()
+
+    def test_output_is_48k(self, tmp_path):
+        from pydub import AudioSegment
+        from pydub.generators import Sine
+        tone = Sine(440).to_audio_segment(duration=2000)
+        wav_in = tmp_path / "input.wav"
+        tone.export(str(wav_in), format="wav")
+        wav_out = tmp_path / "vocals.wav"
+
+        num_samples = 2 * 44100
+        vocals_np = np.sin(np.linspace(0, 440 * 2 * np.pi * 2, num_samples)).astype(np.float32)
+
+        with patch("app.core.preprocess._DEMUCS_AVAILABLE", True), \
+             patch("app.core.preprocess._run_demucs") as mock_run:
+            mock_run.return_value = vocals_np
+            apply_voice_isolation(wav_in, wav_out)
+
+        seg = AudioSegment.from_wav(str(wav_out))
+        assert seg.frame_rate == 48000  # resampled back to 48kHz
+
+    def test_raises_when_demucs_unavailable(self, tmp_path):
+        from pydub import AudioSegment
+        wav_in = tmp_path / "input.wav"
+        AudioSegment.silent(duration=1000).export(str(wav_in), format="wav")
+
+        with patch("app.core.preprocess._DEMUCS_AVAILABLE", False):
+            with pytest.raises(RuntimeError, match="[Dd]emucs"):
+                apply_voice_isolation(wav_in, tmp_path / "out.wav")

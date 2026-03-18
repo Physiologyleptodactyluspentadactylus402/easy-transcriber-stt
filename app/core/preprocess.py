@@ -19,6 +19,20 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
+try:
+    import soundfile as sf
+    import torch
+    import torchaudio
+    from demucs.pretrained import get_model
+    from demucs.apply import apply_model
+    _DEMUCS_AVAILABLE = True
+except ImportError:
+    _DEMUCS_AVAILABLE = False
+
+_demucs_model_cache = {}
+
 logger = logging.getLogger("transcriber.preprocess")
 
 
@@ -306,3 +320,74 @@ def apply_loudnorm(
         target_lufs,
     )
     return output_path.resolve()
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — voice isolation (Demucs)
+# ---------------------------------------------------------------------------
+
+
+def _run_demucs(wav_path: Path) -> np.ndarray:
+    """Run Demucs htdemucs and return the vocals stem as numpy array at 44.1kHz."""
+    if not _DEMUCS_AVAILABLE:
+        raise RuntimeError("Demucs is not installed.")
+
+    model_name = "htdemucs"
+    if model_name not in _demucs_model_cache:
+        model = get_model(model_name)
+        device = "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch, "xpu") and torch.xpu.is_available():
+            device = "xpu"
+        model.to(device)
+        _demucs_model_cache[model_name] = (model, device)
+
+    model, device = _demucs_model_cache[model_name]
+
+    # Load audio
+    wav, sr = torchaudio.load(str(wav_path))
+    # Demucs expects stereo — if mono, duplicate
+    if wav.shape[0] == 1:
+        wav = wav.repeat(2, 1)
+    # Resample to model's sample rate if needed
+    if sr != model.samplerate:
+        wav = torchaudio.transforms.Resample(sr, model.samplerate)(wav)
+
+    # Add batch dim and move to device
+    ref = wav.mean(0)
+    wav = (wav - ref.mean()) / ref.std()
+    wav = wav.unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        sources = apply_model(model, wav, device=device)
+
+    # sources shape: (batch, num_sources, channels, samples)
+    # source order: drums, bass, other, vocals
+    vocals_idx = model.sources.index("vocals")
+    vocals = sources[0, vocals_idx].mean(0).cpu().numpy()  # mono
+    return vocals
+
+
+def apply_voice_isolation(
+    wav_path: Path,
+    output_path: Path,
+) -> Path:
+    """Extract vocals using Demucs htdemucs, resample to 48kHz, save as WAV."""
+    if not _DEMUCS_AVAILABLE:
+        raise RuntimeError(
+            "Demucs is not installed. Install it with: pip install demucs"
+        )
+
+    vocals_np = _run_demucs(wav_path)
+
+    # Demucs outputs at 44100Hz — resample to 48000Hz
+    vocals_tensor = torch.from_numpy(vocals_np).unsqueeze(0)  # (1, samples)
+    resampler = torchaudio.transforms.Resample(44100, 48000)
+    vocals_48k = resampler(vocals_tensor)
+
+    # Save as 16-bit WAV using soundfile (avoids torchaudio backend quirks)
+    vocals_np_48k = vocals_48k.squeeze(0).numpy()
+    sf.write(str(output_path), vocals_np_48k, 48000, subtype="PCM_16")
+    logger.info("Voice isolation: %s → %s", wav_path.name, output_path.name)
+    return output_path
