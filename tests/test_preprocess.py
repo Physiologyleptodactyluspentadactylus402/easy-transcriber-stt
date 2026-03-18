@@ -9,6 +9,7 @@ import pytest
 from app.core.preprocess import (
     PreprocessConfig, PipelineResult, analyze_lufs, apply_denoise,
     apply_loudnorm, apply_voice_isolation, decode_to_wav, run_pipeline,
+    _apply_denoise_ffmpeg,
 )
 
 
@@ -228,7 +229,7 @@ class TestApplyDenoise:
         with patch("app.core.preprocess._DEEPFILTER_AVAILABLE", True), \
              patch("app.core.preprocess._run_deepfilter") as mock_run:
             mock_run.return_value = np.zeros(2 * 48000, dtype=np.float32)
-            result = apply_denoise(wav_in, wav_out)
+            result = apply_denoise(wav_in, wav_out, engine="deepfilter")
 
         assert result.exists()
 
@@ -243,7 +244,7 @@ class TestApplyDenoise:
         with patch("app.core.preprocess._DEEPFILTER_AVAILABLE", True), \
              patch("app.core.preprocess._run_deepfilter") as mock_run:
             mock_run.return_value = np.zeros(2 * 48000, dtype=np.float32)
-            apply_denoise(wav_in, wav_out)
+            apply_denoise(wav_in, wav_out, engine="deepfilter")
 
         seg = AudioSegment.from_wav(str(wav_out))
         assert seg.frame_rate == 48000
@@ -255,7 +256,49 @@ class TestApplyDenoise:
 
         with patch("app.core.preprocess._DEEPFILTER_AVAILABLE", False):
             with pytest.raises(RuntimeError, match="[Dd]eep[Ff]ilter"):
-                apply_denoise(wav_in, tmp_path / "out.wav")
+                apply_denoise(wav_in, tmp_path / "out.wav", engine="deepfilter")
+
+
+class TestApplyDenoiseFFmpeg:
+    """Tests for ffmpeg afftdn denoise engine."""
+
+    def test_output_file_is_created(self, audio_tone_10s, tmp_path):
+        output = tmp_path / "denoised.wav"
+        result = _apply_denoise_ffmpeg(audio_tone_10s, output)
+        assert result.exists()
+        assert result == output.resolve()
+
+    def test_output_is_48k_mono(self, audio_tone_10s, tmp_path):
+        output = tmp_path / "denoised.wav"
+        _apply_denoise_ffmpeg(audio_tone_10s, output)
+        import soundfile as sf
+        data, sr = sf.read(str(output))
+        assert sr == 48000
+        assert data.ndim == 1  # mono
+
+
+class TestApplyDenoiseDispatcher:
+    """Tests for the apply_denoise dispatcher."""
+
+    def test_dispatcher_ffmpeg(self, audio_tone_10s, tmp_path):
+        output = tmp_path / "denoised.wav"
+        result = apply_denoise(audio_tone_10s, output, engine="ffmpeg")
+        assert result.exists()
+
+    @patch("app.core.preprocess._DEEPFILTER_AVAILABLE", True)
+    @patch("app.core.preprocess._run_deepfilter")
+    def test_dispatcher_deepfilter(self, mock_df, audio_tone_10s, tmp_path):
+        import numpy as np
+        mock_df.return_value = np.random.randn(48000 * 10).astype(np.float32)
+        output = tmp_path / "denoised.wav"
+        result = apply_denoise(audio_tone_10s, output, engine="deepfilter")
+        assert result.exists()
+        mock_df.assert_called_once()
+
+    def test_dispatcher_deepfilter_unavailable(self, audio_tone_10s, tmp_path):
+        output = tmp_path / "denoised.wav"
+        with pytest.raises(RuntimeError, match="DeepFilterNet is not installed"):
+            apply_denoise(audio_tone_10s, output, engine="deepfilter")
 
 
 class TestResampleTo16k:

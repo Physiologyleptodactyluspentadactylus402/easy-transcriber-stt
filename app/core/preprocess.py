@@ -446,22 +446,53 @@ def _run_deepfilter(wav_path: Path) -> np.ndarray:
     return enhanced.numpy().flatten()
 
 
-def apply_denoise(
-    wav_path: Path,
-    output_path: Path,
-) -> Path:
-    """Apply DeepFilterNet noise reduction. Input must be 48kHz WAV."""
-    if not _DEEPFILTER_AVAILABLE:
-        raise RuntimeError(
-            "DeepFilterNet is not installed. Install it with: pip install deepfilternet"
-        )
+def _apply_denoise_ffmpeg(wav_path: Path, output_path: Path) -> Path:
+    """Denoise using ffmpeg's afftdn filter, optimized for speech."""
+    if not wav_path.exists():
+        raise FileNotFoundError(f"Input WAV file not found: {wav_path}")
 
-    enhanced_np = _run_deepfilter(wav_path)
+    ffmpeg = _require_ffmpeg()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Save as 16-bit WAV at 48kHz using soundfile
-    sf.write(str(output_path), enhanced_np, 48000, subtype="PCM_16")
-    logger.info("Denoise: %s → %s", wav_path.name, output_path.name)
+    cmd = [
+        ffmpeg, "-y", "-i", str(wav_path),
+        "-af", "afftdn=nf=-25:tn=1",
+        "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le",
+        str(output_path),
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        stderr_text = result.stderr.decode(errors="replace")
+        logger.error("ffmpeg afftdn failed (rc=%d):\n%s", result.returncode, stderr_text)
+        raise RuntimeError(f"ffmpeg denoise failed: {stderr_text}")
+    logger.info("Denoise (ffmpeg): %s → %s", wav_path.name, output_path.name)
     return output_path.resolve()
+
+
+def _apply_denoise_deepfilter(wav_path: Path, output_path: Path) -> Path:
+    """Denoise using DeepFilterNet (state-of-the-art neural noise reduction)."""
+    enhanced = _run_deepfilter(wav_path)
+    sf.write(str(output_path), enhanced, 48000, subtype="PCM_16")
+    logger.info("Denoise (deepfilter): %s → %s", wav_path.name, output_path.name)
+    return output_path.resolve()
+
+
+def apply_denoise(wav_path: Path, output_path: Path, engine: str = "ffmpeg") -> Path:
+    """Denoise audio using the specified engine."""
+    wav_path = Path(wav_path)
+
+    if not wav_path.exists():
+        raise FileNotFoundError(f"Input WAV file not found: {wav_path}")
+
+    if engine == "deepfilter":
+        if not _DEEPFILTER_AVAILABLE:
+            raise RuntimeError(
+                "DeepFilterNet is not installed. "
+                "Install it with: pip install deepfilternet"
+            )
+        return _apply_denoise_deepfilter(wav_path, output_path)
+    else:
+        return _apply_denoise_ffmpeg(wav_path, output_path)
 
 
 # ---------------------------------------------------------------------------
@@ -491,6 +522,7 @@ class PreprocessConfig:
     loudnorm_target: float = -16.0
     voice_isolation: bool = True
     denoise: bool = True
+    denoise_engine: str = "ffmpeg"
 
 
 @dataclass
@@ -597,11 +629,12 @@ def run_pipeline(
 
     # Step 3: Denoise
     if config.denoise:
-        _progress(0.7, "deepfilter", "Removing noise...")
+        engine_label = "deepfilter" if config.denoise_engine == "deepfilter" else "ffmpeg_denoise"
+        _progress(0.7, engine_label, "Removing noise...")
         denoised = work_dir / "step3_denoised.wav"
-        apply_denoise(current, denoised)
+        apply_denoise(current, denoised, engine=config.denoise_engine)
         current = denoised
-        steps_completed.append("deepfilter")
+        steps_completed.append(engine_label)
 
     # Final: save 48kHz copy for player + 16kHz for transcription
     _progress(0.9, "resample", "Preparing final output...")
