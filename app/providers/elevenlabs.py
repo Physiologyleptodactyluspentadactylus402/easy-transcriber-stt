@@ -77,7 +77,6 @@ class ElevenLabsProvider(BaseProvider):
                     language_code=opts.language,
                     diarize=opts.speaker_labels,
                     additional_formats=[],
-                    keyterm_prompting_enabled=bool(opts.prompt),
                     keyterms=opts.prompt.split(",") if opts.prompt else [],
                 )
             last_response = response
