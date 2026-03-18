@@ -85,9 +85,17 @@ class BaseProvider(ABC):
 
     @abstractmethod
     async def transcribe_batch(
-        self, chunks: list[Path], opts: TranscribeOptions
+        self,
+        chunks: list[Path],
+        opts: TranscribeOptions,
+        progress_callback: "Callable[[float, str], None] | None" = None,
     ) -> TranscriptResult:
-        """Transcribe pre-split audio chunks in order."""
+        """Transcribe pre-split audio chunks in order.
+
+        *progress_callback(fraction, message)* is called after each chunk
+        with *fraction* in [0, 1] and a human-readable *message* that may
+        include ETA.
+        """
 
     async def transcribe_live(
         self,

@@ -204,6 +204,8 @@
                 <div class="bg-indigo-500 h-1 rounded transition-all"
                      :style="`width: ${item.progress}%`"></div>
               </div>
+              <div x-show="item.status==='running' && item.progressMessage"
+                   class="text-xs text-gray-500 mt-0.5" x-text="item.progressMessage"></div>
               <div x-show="item.status==='error'" class="text-xs text-red-400 mt-1" x-text="item.error"></div>
               <div x-show="item.status==='done'" class="mt-1 flex gap-2 flex-wrap">
                 <template x-for="path in item.outputFiles" :key="path">

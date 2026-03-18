@@ -55,7 +55,8 @@ class ElevenLabsProvider(BaseProvider):
         pass
 
     async def transcribe_batch(
-        self, chunks: list[Path], opts: TranscribeOptions
+        self, chunks: list[Path], opts: TranscribeOptions,
+        progress_callback=None,
     ) -> TranscriptResult:
         if ElevenLabs is None:
             raise ImportError("elevenlabs package is not installed. Run: pip install elevenlabs")

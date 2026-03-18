@@ -38,9 +38,11 @@ def test_install_deps_calls_pip():
     with patch("subprocess.check_call") as mock_cc, \
          patch.dict("sys.modules", {"qwen_asr": MagicMock()}):
         p.install_deps(progress_callback=lambda prog, msg: calls.append(prog))
-    mock_cc.assert_called_once()
-    args = mock_cc.call_args[0][0]
-    assert "qwen-asr" in args
+    # May call pip once (CPU) or twice (XPU torch + qwen-asr)
+    assert mock_cc.call_count >= 1
+    all_args = [c[0][0] for c in mock_cc.call_args_list]
+    # qwen-asr must appear in at least one pip call
+    assert any("qwen-asr" in args for args in all_args)
     assert calls[0] == 0.0
     assert calls[-1] == 1.0
 

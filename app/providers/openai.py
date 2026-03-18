@@ -53,7 +53,8 @@ class OpenAIProvider(BaseProvider):
         pass  # No heavy deps required
 
     async def transcribe_batch(
-        self, chunks: list[Path], opts: TranscribeOptions
+        self, chunks: list[Path], opts: TranscribeOptions,
+        progress_callback=None,
     ) -> TranscriptResult:
         if OpenAI is None:
             raise RuntimeError("openai package is not installed")

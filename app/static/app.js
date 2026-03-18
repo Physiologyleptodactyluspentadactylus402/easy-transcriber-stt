@@ -198,7 +198,11 @@ function app() {
     _handleWsMessage(msg) {
       if (msg.type === 'progress') {
         const item = this.files.find(f => f.jobId === msg.job_id);
-        if (item) { item.progress = msg.progress * 100; item.status = 'running'; }
+        if (item) {
+          item.progress = msg.progress * 100;
+          item.status = 'running';
+          item.progressMessage = msg.message || '';
+        }
       } else if (msg.type === 'done') {
         for (const f of this.files) {
           if (f.jobId === msg.job_id) {

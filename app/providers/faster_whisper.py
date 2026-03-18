@@ -90,7 +90,10 @@ class FasterWhisperProvider(BaseProvider):
         return self._model_cache[model_id]
 
     async def transcribe_batch(
-        self, chunks: list[Path], opts: TranscribeOptions
+        self,
+        chunks: list[Path],
+        opts: TranscribeOptions,
+        progress_callback: "Callable[[float, str], None] | None" = None,
     ) -> TranscriptResult:
         if WhisperModel is None:
             raise RuntimeError(
@@ -103,8 +106,23 @@ class FasterWhisperProvider(BaseProvider):
 
         segments: list[Segment] = []
         offset = 0.0
+        import time as _time
+        chunk_times: list[float] = []
 
-        for chunk_path in chunks:
+        for i, chunk_path in enumerate(chunks, 1):
+            if progress_callback:
+                frac = (i - 1) / len(chunks)
+                if chunk_times:
+                    avg = sum(chunk_times) / len(chunk_times)
+                    remaining = avg * (len(chunks) - i + 1)
+                    m, s = divmod(int(remaining), 60)
+                    eta = f"{m}m {s:02d}s" if m else f"{s}s"
+                    msg = f"Chunk {i}/{len(chunks)} — ETA {eta}"
+                else:
+                    msg = f"Chunk {i}/{len(chunks)}…"
+                progress_callback(frac, msg)
+
+            t0 = _time.monotonic()
             def _transcribe(path=chunk_path):
                 kwargs: dict = {"beam_size": 5}
                 if opts.language:
@@ -115,6 +133,7 @@ class FasterWhisperProvider(BaseProvider):
                 return list(raw_segs), info.duration
 
             raw_segs, duration = await loop.run_in_executor(None, _transcribe)
+            chunk_times.append(_time.monotonic() - t0)
             for seg in raw_segs:
                 segments.append(Segment(
                     start=seg.start + offset,
@@ -123,6 +142,8 @@ class FasterWhisperProvider(BaseProvider):
                 ))
             offset += duration
 
+        if progress_callback:
+            progress_callback(1.0, "Transcription complete")
         return TranscriptResult(
             segments=segments,
             provider_name=self.name,

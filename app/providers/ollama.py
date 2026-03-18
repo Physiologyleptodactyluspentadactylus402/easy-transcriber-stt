@@ -54,7 +54,8 @@ class OllamaProvider(BaseProvider):
         pass  # httpx already in requirements.txt; Ollama daemon installed by user
 
     async def transcribe_batch(
-        self, chunks: list[Path], opts: TranscribeOptions
+        self, chunks: list[Path], opts: TranscribeOptions,
+        progress_callback=None,
     ) -> TranscriptResult:
         if not self._available:
             raise RuntimeError(

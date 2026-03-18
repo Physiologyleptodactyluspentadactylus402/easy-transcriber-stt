@@ -413,10 +413,29 @@ async def _run_job(job: Job, settings: Settings, providers: dict, history: Histo
                 return
 
             await emit({"type": "progress", "job_id": job.id,
-                        "progress": (file_idx + 0.3) / len(job.input_files),
-                        "message": f"Transcribing {input_file.name} ({len(chunks)} chunks)..."})
+                        "progress": (file_idx + 0.1) / len(job.input_files),
+                        "message": f"Transcribing {input_file.name} ({len(chunks)} chunks)…"})
 
-            result = await provider.transcribe_batch(chunks, job.opts)
+            # Progress callback: maps provider chunk progress (0-1) into the
+            # file-level range [file_idx+0.1 … file_idx+1) / num_files.
+            n_files = len(job.input_files)
+            async def _emit_chunk_progress(frac: float, msg: str,
+                                           _fidx=file_idx, _nf=n_files):
+                overall = (_fidx + 0.1 + frac * 0.9) / _nf
+                await emit({"type": "progress", "job_id": job.id,
+                            "progress": overall, "message": msg})
+
+            def _sync_progress(frac: float, msg: str):
+                """Thread-safe bridge: schedule the async emit on the event loop."""
+                import asyncio as _aio
+                loop = _aio.get_event_loop()
+                loop.call_soon_threadsafe(
+                    _aio.ensure_future, _emit_chunk_progress(frac, msg)
+                )
+
+            result = await provider.transcribe_batch(
+                chunks, job.opts, progress_callback=_sync_progress
+            )
             all_results.append((result, input_file.name))
 
         if job.status == "cancelled":
