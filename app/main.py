@@ -143,12 +143,23 @@ def create_app(
     @app.get("/api/download")
     async def download_file(path: str):
         from fastapi import HTTPException
+        import tempfile
         file_path = Path(path).resolve()
         # Only serve files within known output roots (prevent path traversal)
-        allowed_roots = [*(
-            [settings.output_dir.resolve()] if settings.output_dir else []
-        ), (Path.home() / "Documents" / "Transcriber").resolve()]
+        allowed_roots = [
+            *(
+                [settings.output_dir.resolve()] if settings.output_dir else []
+            ),
+            (Path.home() / "Documents" / "Transcriber").resolve(),
+            # Also allow system temp dir — older jobs may have written there
+            Path(tempfile.gettempdir()).resolve(),
+        ]
         if not any(_path_within(file_path, root) for root in allowed_roots):
+            logger.warning(
+                "Download denied: %s not within allowed roots %s",
+                file_path,
+                [str(r) for r in allowed_roots],
+            )
             raise HTTPException(status_code=403, detail="Access denied")
         if not file_path.exists():
             raise HTTPException(status_code=404, detail="File not found")

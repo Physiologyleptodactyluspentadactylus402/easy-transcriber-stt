@@ -166,7 +166,10 @@ class Qwen3ASRProvider(BaseProvider):
 
             kwargs: dict = {
                 "device_map": device_map,
-                "max_new_tokens": 512,
+                # 512 (library default) truncates long audio chunks.
+                # A 10-min chunk can easily produce 2000-4000 tokens.
+                # qwen-asr's own demo uses 4096 for file transcription.
+                "max_new_tokens": 4096,
             }
             if dtype is not None:
                 kwargs["dtype"] = dtype
