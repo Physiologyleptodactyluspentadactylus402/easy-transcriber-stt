@@ -98,6 +98,7 @@ def create_app(
             "default_model": settings.default_model,
             "default_output_formats": settings.default_output_formats,
             "wizard_complete": settings.wizard_complete,
+            "denoise_engine": settings.denoise_engine,
             "openai_key_set": bool(settings.openai_api_key),
             "elevenlabs_key_set": bool(settings.elevenlabs_api_key),
         }
@@ -108,6 +109,7 @@ def create_app(
             "language", "output_dir", "chunk_size_sec",
             "default_provider", "default_model",
             "default_output_formats", "wizard_complete",
+            "denoise_engine",
         }
         for key, value in body.items():
             if key in allowed:
@@ -399,6 +401,7 @@ def create_app(
         loudnorm_target: float = Form(-16.0),
         voice_isolation: bool = Form(True),
         denoise: bool = Form(True),
+        denoise_engine: str = Form("ffmpeg"),
     ):
         import uuid
         job_id = str(uuid.uuid4())
@@ -414,16 +417,19 @@ def create_app(
         from app.core.preprocess import PreprocessConfig
         if preset == "lecture":
             config = PreprocessConfig(loudnorm=True, loudnorm_target=-16.0,
-                                      voice_isolation=True, denoise=True)
+                                      voice_isolation=True, denoise=True,
+                                      denoise_engine=denoise_engine)
         elif preset == "clean":
             config = PreprocessConfig(loudnorm=True, loudnorm_target=-16.0,
-                                      voice_isolation=False, denoise=False)
+                                      voice_isolation=False, denoise=False,
+                                      denoise_engine=denoise_engine)
         else:  # custom
             config = PreprocessConfig(
                 loudnorm=loudnorm,
                 loudnorm_target=loudnorm_target,
                 voice_isolation=voice_isolation,
                 denoise=denoise,
+                denoise_engine=denoise_engine,
             )
 
         job = AudioLabJob(id=job_id, original_filename=file.filename or "upload")

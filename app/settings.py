@@ -29,6 +29,7 @@ class Settings:
             "default_output_formats", ["txt", "srt"]
         )
         self.wizard_complete: bool = data.get("wizard_complete", False)
+        self.denoise_engine: str = data.get("denoise_engine", "ffmpeg")
 
     def save(self) -> None:
         data = {
@@ -39,6 +40,7 @@ class Settings:
             "default_model": self.default_model,
             "default_output_formats": self.default_output_formats,
             "wizard_complete": self.wizard_complete,
+            "denoise_engine": self.denoise_engine,
         }
         self._path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 

@@ -211,3 +211,18 @@ def test_audiolab_install_known_tool(client):
     r = client.post("/api/audiolab/install/demucs")
     assert r.status_code == 200
     assert r.json()["ok"] is True
+
+
+def test_audiolab_process_accepts_denoise_engine(client, tmp_path):
+    """POST /api/audiolab/process accepts denoise_engine param."""
+    wav = tmp_path / "test.wav"
+    import numpy as np, soundfile as sf
+    sf.write(str(wav), np.zeros(16000, dtype=np.float32), 16000)
+    with open(wav, "rb") as f:
+        resp = client.post(
+            "/api/audiolab/process",
+            files={"file": ("test.wav", f, "audio/wav")},
+            data={"preset": "custom", "denoise": "true", "denoise_engine": "ffmpeg"},
+        )
+    assert resp.status_code == 200
+    assert "job_id" in resp.json()
