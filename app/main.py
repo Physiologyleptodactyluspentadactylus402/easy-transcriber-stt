@@ -425,7 +425,9 @@ async def _run_job(job: Job, settings: Settings, providers: dict, history: Histo
 
         # Write output files
         output_files: list[Path] = []
-        output_dir = settings.resolve_output_dir(job.input_files[0] if job.input_files else None)
+        # Always use a known output directory (never the temp upload dir)
+        # so the download endpoint's allow-list can serve the files.
+        output_dir = settings.resolve_output_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
 
         base_name = job.input_files[0].stem if len(job.input_files) == 1 else "merged"
