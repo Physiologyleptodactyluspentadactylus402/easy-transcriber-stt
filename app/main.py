@@ -239,6 +239,19 @@ def create_app(
         await _ws_manager.connect(ws)
         job_id = None
         live_session_id = None
+
+        # Background task: send keepalive pings every 25s to prevent
+        # browser/proxy from closing idle connections during long jobs.
+        async def _keepalive():
+            try:
+                while True:
+                    await asyncio.sleep(25)
+                    await ws.send_json({"type": "pong"})
+            except Exception:
+                pass
+
+        keepalive_task = asyncio.create_task(_keepalive())
+
         try:
             while True:
                 data = await ws.receive_json()
@@ -299,6 +312,7 @@ def create_app(
                         })
 
         except WebSocketDisconnect:
+            keepalive_task.cancel()
             _ws_manager.disconnect(ws, job_id)
             if live_session_id:
                 session = _live_sessions.get(live_session_id)

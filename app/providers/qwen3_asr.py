@@ -130,10 +130,17 @@ class Qwen3ASRProvider(BaseProvider):
         segments: list[Segment] = []
         offset = 0.0
 
-        for chunk_path in chunks:
+        import time as _time
+        for i, chunk_path in enumerate(chunks, 1):
+            logger.info(
+                "Transcribing chunk %d/%d: %s", i, len(chunks), chunk_path.name
+            )
+
             def _run(path=chunk_path):
-                # qwen-asr accepts local paths, URLs, base64, or numpy arrays
+                t0 = _time.monotonic()
                 results = model.transcribe(audio=str(path))
+                elapsed = _time.monotonic() - t0
+                logger.info("Chunk %s done in %.1fs", path.name, elapsed)
                 return results
 
             results = await loop.run_in_executor(None, _run)

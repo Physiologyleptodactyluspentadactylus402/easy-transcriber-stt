@@ -177,8 +177,17 @@ function app() {
     _connectWs() {
       const port = window.APP_PORT || 8000;
       this._ws = new WebSocket(`ws://localhost:${port}/ws`);
+      this._ws.onopen = () => {
+        // Re-subscribe to any running jobs after reconnect
+        for (const f of this.files) {
+          if (f.jobId && f.status === 'running') {
+            this._ws.send(JSON.stringify({ type: 'subscribe', job_id: f.jobId }));
+          }
+        }
+      };
       this._ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
+        if (msg.type === 'pong') return;  // keepalive response, ignore
         this._handleWsMessage(msg);
       };
       this._ws.onclose = () => {
