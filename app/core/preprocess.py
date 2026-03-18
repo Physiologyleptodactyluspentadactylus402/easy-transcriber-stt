@@ -16,8 +16,9 @@ import logging
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 import soundfile as sf
@@ -440,3 +441,181 @@ def apply_denoise(
     sf.write(str(output_path), enhanced_np, 48000, subtype="PCM_16")
     logger.info("Denoise: %s → %s", wav_path.name, output_path.name)
     return output_path.resolve()
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — pipeline orchestrator
+# ---------------------------------------------------------------------------
+
+
+def _resample_to_16k(wav_path: Path, output_path: Path) -> Path:
+    """Downsample WAV to 16kHz mono 16-bit for transcription."""
+    ffmpeg = _require_ffmpeg()
+    cmd = [
+        ffmpeg, "-y", "-i", str(wav_path),
+        "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
+        str(output_path),
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        stderr_text = result.stderr.decode(errors="replace")
+        raise RuntimeError(f"FFmpeg resample failed: {stderr_text}")
+    return output_path.resolve()
+
+
+@dataclass
+class PreprocessConfig:
+    """Configuration for the preprocessing pipeline."""
+    loudnorm: bool = True
+    loudnorm_target: float = -16.0
+    voice_isolation: bool = True
+    denoise: bool = True
+
+
+@dataclass
+class PipelineResult:
+    """Result of a preprocessing pipeline run."""
+    original_path: Path
+    processed_path: Path
+    processed_48k_path: Path
+    stats: dict | None = None
+    cancelled: bool = False
+    steps_completed: list[str] = field(default_factory=list)
+
+
+def run_pipeline(
+    input_path: Path,
+    work_dir: Path,
+    config: PreprocessConfig,
+    progress_callback: Callable[[float, str, str], None] | None = None,
+    cancel_flag: dict | None = None,
+) -> PipelineResult:
+    """Run the full preprocessing pipeline.
+
+    Args:
+        input_path: Path to the input audio file.
+        work_dir: Directory for intermediate and output files.
+        config: Which steps to run and parameters.
+        progress_callback: Called with (fraction, step_name, message).
+        cancel_flag: Dict with key 'cancelled' checked between steps.
+
+    Returns:
+        PipelineResult with paths and stats.
+    """
+    work_dir = Path(work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    def _cancelled() -> bool:
+        return bool(cancel_flag and cancel_flag.get("cancelled"))
+
+    def _progress(frac: float, step: str, msg: str):
+        if progress_callback:
+            progress_callback(frac, step, msg)
+
+    steps_completed: list[str] = []
+
+    # Step 0: Decode to 48kHz WAV
+    _progress(0.0, "decode", "Decoding audio...")
+    original_wav = work_dir / "original.wav"
+    decode_to_wav(input_path, original_wav, sample_rate=48000)
+    steps_completed.append("decode")
+
+    # LUFS analysis (always, even if loudnorm is off)
+    _progress(0.1, "analyze", "Measuring loudness...")
+    lufs_stats = analyze_lufs(original_wav)
+    original_lufs = lufs_stats["input_i"]
+
+    if _cancelled():
+        return PipelineResult(
+            original_path=original_wav,
+            processed_path=original_wav,
+            processed_48k_path=original_wav,
+            stats={"original_lufs": original_lufs},
+            cancelled=True,
+            steps_completed=steps_completed,
+        )
+
+    # Track the current working file (48kHz)
+    current = original_wav
+
+    # Step 1: Loudnorm
+    if config.loudnorm:
+        _progress(0.2, "loudnorm", f"Normalizing to {config.loudnorm_target} LUFS...")
+        normalized = work_dir / "step1_loudnorm.wav"
+        apply_loudnorm(current, normalized, target_lufs=config.loudnorm_target, measured=lufs_stats)
+        current = normalized
+        steps_completed.append("loudnorm")
+
+    if _cancelled():
+        processed_16k = work_dir / "processed.wav"
+        _resample_to_16k(current, processed_16k)
+        return PipelineResult(
+            original_path=original_wav, processed_path=processed_16k,
+            processed_48k_path=current,
+            stats={"original_lufs": original_lufs},
+            cancelled=True, steps_completed=steps_completed,
+        )
+
+    # Step 2: Voice isolation
+    if config.voice_isolation:
+        _progress(0.4, "demucs", "Isolating voice (this may take a while)...")
+        vocals = work_dir / "step2_vocals.wav"
+        apply_voice_isolation(current, vocals)
+        current = vocals
+        steps_completed.append("demucs")
+
+    if _cancelled():
+        processed_16k = work_dir / "processed.wav"
+        _resample_to_16k(current, processed_16k)
+        return PipelineResult(
+            original_path=original_wav, processed_path=processed_16k,
+            processed_48k_path=current,
+            stats={"original_lufs": original_lufs},
+            cancelled=True, steps_completed=steps_completed,
+        )
+
+    # Step 3: Denoise
+    if config.denoise:
+        _progress(0.7, "deepfilter", "Removing noise...")
+        denoised = work_dir / "step3_denoised.wav"
+        apply_denoise(current, denoised)
+        current = denoised
+        steps_completed.append("deepfilter")
+
+    # Final: save 48kHz copy for player + 16kHz for transcription
+    _progress(0.9, "resample", "Preparing final output...")
+    processed_48k = work_dir / "processed_48k.wav"
+    processed_16k = work_dir / "processed.wav"
+
+    # Copy current result as the 48k version (for A/B player)
+    if current.resolve() != processed_48k.resolve():
+        shutil.copy2(current, processed_48k)
+
+    _resample_to_16k(current, processed_16k)
+    steps_completed.append("resample")
+
+    # Measure processed LUFS
+    processed_lufs_stats = analyze_lufs(processed_48k)
+    original_size = Path(input_path).stat().st_size
+    processed_size = processed_16k.stat().st_size
+
+    from pydub import AudioSegment
+    duration_sec = len(AudioSegment.from_wav(str(processed_16k))) / 1000.0
+
+    stats = {
+        "original_lufs": original_lufs,
+        "processed_lufs": processed_lufs_stats["input_i"],
+        "duration_sec": duration_sec,
+        "original_size": original_size,
+        "processed_size": processed_size,
+    }
+
+    _progress(1.0, "done", "Processing complete")
+    logger.info("Pipeline complete: steps=%s, stats=%s", steps_completed, stats)
+    return PipelineResult(
+        original_path=original_wav,
+        processed_path=processed_16k,
+        processed_48k_path=processed_48k,
+        stats=stats,
+        steps_completed=steps_completed,
+    )

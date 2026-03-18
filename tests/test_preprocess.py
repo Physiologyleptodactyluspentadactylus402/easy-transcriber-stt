@@ -6,7 +6,10 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from app.core.preprocess import analyze_lufs, apply_denoise, apply_loudnorm, apply_voice_isolation, decode_to_wav
+from app.core.preprocess import (
+    PreprocessConfig, PipelineResult, analyze_lufs, apply_denoise,
+    apply_loudnorm, apply_voice_isolation, decode_to_wav, run_pipeline,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -253,3 +256,83 @@ class TestApplyDenoise:
         with patch("app.core.preprocess._DEEPFILTER_AVAILABLE", False):
             with pytest.raises(RuntimeError, match="[Dd]eep[Ff]ilter"):
                 apply_denoise(wav_in, tmp_path / "out.wav")
+
+
+class TestResampleTo16k:
+    def test_output_is_16k_mono(self, audio_tone_10s, tmp_path):
+        from app.core.preprocess import _resample_to_16k
+        wav_in = tmp_path / "in.wav"
+        decode_to_wav(audio_tone_10s, wav_in, sample_rate=48000)
+        wav_out = tmp_path / "out_16k.wav"
+        _resample_to_16k(wav_in, wav_out)
+        with wave.open(str(wav_out)) as wf:
+            assert wf.getframerate() == 16000
+            assert wf.getnchannels() == 1
+            assert wf.getsampwidth() == 2
+
+
+class TestRunPipeline:
+    def test_loudnorm_only(self, audio_tone_10s, tmp_path):
+        config = PreprocessConfig(
+            loudnorm=True,
+            loudnorm_target=-16.0,
+            voice_isolation=False,
+            denoise=False,
+        )
+        result = run_pipeline(audio_tone_10s, tmp_path / "work", config)
+        assert result.processed_path.exists()
+        assert result.processed_48k_path.exists()
+        assert result.original_path.exists()
+        assert result.stats is not None
+        assert "original_lufs" in result.stats
+        assert "processed_lufs" in result.stats
+        assert result.cancelled is False
+        # Final output is 16kHz
+        with wave.open(str(result.processed_path)) as wf:
+            assert wf.getframerate() == 16000
+        # 48k version for player
+        with wave.open(str(result.processed_48k_path)) as wf:
+            assert wf.getframerate() == 48000
+
+    def test_no_steps(self, audio_tone_10s, tmp_path):
+        config = PreprocessConfig(
+            loudnorm=False,
+            voice_isolation=False,
+            denoise=False,
+        )
+        result = run_pipeline(audio_tone_10s, tmp_path / "work", config)
+        assert result.processed_path.exists()
+        assert result.stats is not None
+        assert "original_lufs" in result.stats
+        assert result.cancelled is False
+
+    def test_cancellation_before_loudnorm(self, audio_tone_10s, tmp_path):
+        cancel_flag = {"cancelled": True}
+        config = PreprocessConfig(loudnorm=True, voice_isolation=True, denoise=True)
+        result = run_pipeline(
+            audio_tone_10s, tmp_path / "work", config,
+            cancel_flag=cancel_flag,
+        )
+        assert result.cancelled is True
+        assert result.stats is not None
+        assert "original_lufs" in result.stats
+        assert "decode" in result.steps_completed
+
+    def test_progress_callback(self, audio_tone_10s, tmp_path):
+        calls = []
+        def cb(frac, step, msg):
+            calls.append((frac, step, msg))
+        config = PreprocessConfig(loudnorm=True, voice_isolation=False, denoise=False)
+        run_pipeline(audio_tone_10s, tmp_path / "work", config, progress_callback=cb)
+        assert len(calls) >= 4  # decode, analyze, loudnorm, resample, done
+        assert calls[0][1] == "decode"
+        assert calls[-1][0] == 1.0
+
+    def test_steps_completed_tracks_steps(self, audio_tone_10s, tmp_path):
+        config = PreprocessConfig(loudnorm=True, voice_isolation=False, denoise=False)
+        result = run_pipeline(audio_tone_10s, tmp_path / "work", config)
+        assert "decode" in result.steps_completed
+        assert "loudnorm" in result.steps_completed
+        assert "resample" in result.steps_completed
+        assert "demucs" not in result.steps_completed
+        assert "deepfilter" not in result.steps_completed
