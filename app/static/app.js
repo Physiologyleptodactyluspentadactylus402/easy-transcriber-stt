@@ -52,6 +52,27 @@ function app() {
     ffmpegAvailable: true,
     liveSaveAudio: false,
 
+    // ── Audio Lab state ──────────────────────────────────────
+    alFile: null,
+    alJobId: null,
+    alStatus: 'idle',       // idle | processing | done | error | cancelled
+    alProgress: 0,
+    alStep: '',
+    alMessage: '',
+    alPreset: 'lecture',
+    alLoudnorm: true,
+    alLoudnormTarget: -16,
+    alVoiceIsolation: true,
+    alDenoise: true,
+    alStats: null,
+    alPlayerSource: 'A',
+    alPlaying: false,
+    alCurrentTime: 0,
+    alDuration: 0,
+    alVolume: 1.0,
+    alOriginalUrl: null,
+    alProcessedUrl: null,
+
     // WebSocket
     _ws: null,
 
@@ -65,6 +86,15 @@ function app() {
       this._connectWs();
       await this._checkFfmpeg();
       this._updateLiveProviders();
+
+      // Audio Lab keyboard shortcuts (scoped)
+      document.addEventListener('keydown', (e) => {
+        if (this.currentSection !== 'audiolab') return;
+        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+        if (e.code === 'Space') { e.preventDefault(); this.alPlay(); }
+        if (e.key === 'a' || e.key === 'A') { this.alPlayerSource = 'A'; this._alSyncPlayer(); }
+        if (e.key === 'b' || e.key === 'B') { this.alPlayerSource = 'B'; this._alSyncPlayer(); }
+      });
     },
 
     async loadProviders() {
@@ -250,6 +280,27 @@ function app() {
         this.liveTimer = 0;
         clearInterval(this._liveTimerInterval);
         this._liveTimerInterval = null;
+
+      // Audio Lab progress
+      } else if (msg.type === 'audiolab_progress') {
+        if (msg.job_id === this.alJobId) {
+          this.alProgress = msg.progress;
+          this.alStep = msg.step;
+          this.alMessage = msg.message;
+        }
+      } else if (msg.type === 'audiolab_done') {
+        if (msg.job_id === this.alJobId) {
+          this.alStatus = 'done';
+          this.alProgress = 1;
+          this.alOriginalUrl = msg.original_url;
+          this.alProcessedUrl = msg.processed_url;
+          this.alStats = msg.stats;
+        }
+      } else if (msg.type === 'audiolab_error') {
+        if (msg.job_id === this.alJobId) {
+          this.alStatus = msg.message === 'Cancelled by user' ? 'cancelled' : 'error';
+          this.alMessage = msg.message;
+        }
       }
     },
 
@@ -481,6 +532,123 @@ function app() {
       if (bytes < 1024) return bytes + ' B';
       if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
       return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    },
+
+    // ── Audio Lab methods ────────────────────────────────────
+    alHandleFile(event) {
+      const files = event.target?.files || event.dataTransfer?.files;
+      if (files && files.length > 0) {
+        this.alFile = files[0];
+        this.alStatus = 'idle';
+        this.alStats = null;
+        this.alOriginalUrl = null;
+        this.alProcessedUrl = null;
+        this.alJobId = null;
+      }
+    },
+
+    alSetPreset(preset) {
+      this.alPreset = preset;
+      if (preset === 'lecture') {
+        this.alLoudnorm = true; this.alLoudnormTarget = -16;
+        this.alVoiceIsolation = true; this.alDenoise = true;
+      } else if (preset === 'clean') {
+        this.alLoudnorm = true; this.alLoudnormTarget = -16;
+        this.alVoiceIsolation = false; this.alDenoise = false;
+      }
+    },
+
+    alCanProcess() {
+      return this.alFile && (this.alLoudnorm || this.alVoiceIsolation || this.alDenoise);
+    },
+
+    async alProcess() {
+      if (!this.alFile || this.alStatus === 'processing') return;
+      const formData = new FormData();
+      formData.append('file', this.alFile);
+      formData.append('preset', this.alPreset);
+      if (this.alPreset === 'custom') {
+        formData.append('loudnorm', this.alLoudnorm);
+        formData.append('loudnorm_target', this.alLoudnormTarget);
+        formData.append('voice_isolation', this.alVoiceIsolation);
+        formData.append('denoise', this.alDenoise);
+      }
+      this.alStatus = 'processing';
+      this.alProgress = 0;
+      this.alMessage = '';
+      const r = await fetch('/api/audiolab/process', { method: 'POST', body: formData });
+      const data = await r.json();
+      this.alJobId = data.job_id;
+    },
+
+    async alCancel() {
+      if (!this.alJobId) return;
+      await fetch(`/api/audiolab/cancel/${this.alJobId}`, { method: 'POST' });
+    },
+
+    async alSendToTranscribe() {
+      if (!this.alJobId) return;
+      const r = await fetch('/api/audiolab/send-to-transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: this.alJobId }),
+      });
+      const data = await r.json();
+      this.files.push({
+        name: data.filename,
+        status: 'running',
+        jobId: data.transcription_job_id,
+        progress: 0,
+        progressMessage: '',
+        outputFiles: [],
+        error: null,
+      });
+      this._subscribeJob(data.transcription_job_id);
+      this.currentSection = 'transcribe';
+    },
+
+    alPlay() {
+      const audioA = this.$refs.alAudioA;
+      const audioB = this.$refs.alAudioB;
+      if (!audioA || !audioB) return;
+      if (this.alPlaying) {
+        audioA.pause(); audioB.pause();
+      } else {
+        audioB.currentTime = audioA.currentTime;
+        audioA.play(); audioB.play();
+      }
+      this.alPlaying = !this.alPlaying;
+      this._alSyncPlayer();
+    },
+
+    alSeek(event) {
+      const bar = event.currentTarget;
+      const frac = event.offsetX / bar.offsetWidth;
+      const time = frac * this.alDuration;
+      const audioA = this.$refs.alAudioA;
+      const audioB = this.$refs.alAudioB;
+      if (audioA) audioA.currentTime = time;
+      if (audioB) audioB.currentTime = time;
+      this.alCurrentTime = time;
+    },
+
+    alSetVolume(val) {
+      this.alVolume = val;
+      const audioA = this.$refs.alAudioA;
+      const audioB = this.$refs.alAudioB;
+      if (audioA) audioA.volume = val;
+      if (audioB) audioB.volume = val;
+    },
+
+    _alSyncPlayer() {
+      const audioA = this.$refs.alAudioA;
+      const audioB = this.$refs.alAudioB;
+      if (!audioA || !audioB) return;
+      if (this.alPlayerSource === 'A') {
+        audioA.muted = false; audioB.muted = true;
+      } else {
+        audioA.muted = true; audioB.muted = false;
+      }
     },
 
     t(key) {
