@@ -76,23 +76,23 @@ class ElevenLabsProvider(BaseProvider):
                     model_id=opts.model_id,
                     language_code=opts.language,
                     diarize=opts.speaker_labels,
-                    additional_formats=[],
+                    timestamps_granularity="word",
                     keyterms=opts.prompt.split(",") if opts.prompt else [],
                 )
             last_response = response
 
-            # Parse utterances (with speaker) or words, or fall back to plain text
-            if opts.speaker_labels and response.utterances:
-                for utt in response.utterances:
-                    all_segments.append(Segment(
-                        start=(utt.start or 0.0) + offset,
-                        end=(utt.end or 0.0) + offset,
-                        text=utt.text.strip(),
-                        speaker=f"Speaker {utt.speaker_id}" if utt.speaker_id is not None else None,
-                    ))
-            elif response.words:
-                all_segments.extend(_words_to_segments(response.words, offset))
+            # The API returns word-level results with optional speaker_id.
+            # Group words into segments by speaker change or pause.
+            if response.words:
+                all_segments.extend(
+                    _words_to_segments(
+                        response.words,
+                        offset,
+                        use_speakers=opts.speaker_labels,
+                    )
+                )
             else:
+                # Fallback: no word-level data, use full text
                 chunk_duration = float(opts.chunk_size_sec)
                 all_segments.append(Segment(
                     start=offset,
@@ -112,28 +112,56 @@ class ElevenLabsProvider(BaseProvider):
         )
 
 
-def _words_to_segments(words, offset: float, max_gap_sec: float = 1.5) -> list[Segment]:
-    """Group words into segments separated by pauses > max_gap_sec."""
+def _words_to_segments(
+    words: list,
+    offset: float,
+    max_gap_sec: float = 1.5,
+    use_speakers: bool = False,
+) -> list[Segment]:
+    """Group words into segments, splitting on speaker changes or pauses.
+
+    When ``use_speakers`` is True (diarize=True), segments are also split
+    whenever ``speaker_id`` changes, so each segment belongs to one speaker.
+    """
     if not words:
         return []
-    segments: list[Segment] = []
-    current_words = [words[0]]
 
-    for word in words[1:]:
+    # Filter out spacing tokens — they carry no transcription value
+    real_words = [w for w in words if getattr(w, "type", "word") != "spacing"]
+    if not real_words:
+        return []
+
+    segments: list[Segment] = []
+    current_words = [real_words[0]]
+    current_speaker = getattr(real_words[0], "speaker_id", None)
+
+    for word in real_words[1:]:
         gap = (word.start or 0) - (current_words[-1].end or 0)
-        if gap > max_gap_sec:
-            segments.append(_make_segment(current_words, offset))
+        word_speaker = getattr(word, "speaker_id", None)
+
+        # Split on pause OR speaker change
+        speaker_changed = use_speakers and word_speaker != current_speaker
+        if gap > max_gap_sec or speaker_changed:
+            segments.append(_make_segment(current_words, offset, current_speaker if use_speakers else None))
             current_words = [word]
+            current_speaker = word_speaker
         else:
             current_words.append(word)
 
-    segments.append(_make_segment(current_words, offset))
+    segments.append(_make_segment(current_words, offset, current_speaker if use_speakers else None))
     return segments
 
 
-def _make_segment(words, offset: float) -> Segment:
+def _make_segment(words: list, offset: float, speaker_id: str | None = None) -> Segment:
+    text = " ".join(w.text for w in words if getattr(w, "type", "word") != "audio_event").strip()
+    # Include audio events in brackets
+    events = [f"[{w.text}]" for w in words if getattr(w, "type", None) == "audio_event"]
+    if events:
+        text = f"{text} {' '.join(events)}".strip()
+
     return Segment(
         start=(words[0].start or 0.0) + offset,
         end=(words[-1].end or 0.0) + offset,
-        text=" ".join(w.text for w in words).strip(),
+        text=text,
+        speaker=f"Speaker {speaker_id}" if speaker_id is not None else None,
     )
