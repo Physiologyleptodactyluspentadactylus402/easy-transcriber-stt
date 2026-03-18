@@ -154,3 +154,36 @@ def test_websocket_stop_live_responds_with_session_stopped(tmp_path):
         stop_msg = ws.receive_json()
         assert stop_msg["type"] == "live_session_stopped"
         assert stop_msg["session_id"] == session_id
+
+
+def test_audiolab_process_returns_job_id(client, tmp_path):
+    """POST /api/audiolab/process should accept a file and return a job_id."""
+    import io
+    audio_bytes = io.BytesIO(b"fake audio data")
+    response = client.post(
+        "/api/audiolab/process",
+        data={"preset": "lecture"},
+        files={"file": ("test.mp3", audio_bytes, "audio/mpeg")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "job_id" in body
+    assert body["status"] == "processing"
+
+
+def test_audiolab_cancel_unknown_job(client):
+    """POST /api/audiolab/cancel/{job_id} returns 404 for unknown job."""
+    response = client.post("/api/audiolab/cancel/nonexistent-id")
+    assert response.status_code == 404
+
+
+def test_audiolab_preview_unknown_job(client):
+    """GET /api/audiolab/preview/{job_id} returns 404 for unknown job."""
+    response = client.get("/api/audiolab/preview/nonexistent-id?which=original")
+    assert response.status_code == 404
+
+
+def test_audiolab_download_unknown_job(client):
+    """GET /api/audiolab/download/{job_id} returns 404 for unknown job."""
+    response = client.get("/api/audiolab/download/nonexistent-id")
+    assert response.status_code == 404

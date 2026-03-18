@@ -4,6 +4,7 @@ import json
 import logging
 import shutil
 import tempfile
+from dataclasses import dataclass, field as dc_field
 from pathlib import Path
 
 logger = logging.getLogger("transcriber")
@@ -348,6 +349,220 @@ def create_app(
                         await session.stop(_ws_manager)
                     finally:
                         _live_sessions.remove(live_session_id)
+
+    # --- Audio Lab ---
+    @dataclass
+    class AudioLabJob:
+        id: str
+        status: str = "processing"
+        original_path: Path | None = None
+        processed_path: Path | None = None
+        processed_48k_path: Path | None = None
+        progress: float = 0.0
+        current_step: str = "decode"
+        message: str = ""
+        cancelled: bool = False
+        stats: dict | None = None
+        original_filename: str = ""
+
+    _audiolab_jobs: dict[str, AudioLabJob] = {}
+
+    @app.post("/api/audiolab/process")
+    async def audiolab_process(
+        file: UploadFile,
+        preset: str = Form("lecture"),
+        loudnorm: bool = Form(True),
+        loudnorm_target: float = Form(-16.0),
+        voice_isolation: bool = Form(True),
+        denoise: bool = Form(True),
+    ):
+        import uuid
+        job_id = str(uuid.uuid4())
+
+        # Save uploaded file to temp dir
+        cache_dir = Path(tempfile.gettempdir()) / "transcriber_audiolab" / job_id
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        input_path = cache_dir / (file.filename or "upload.wav")
+        content = await file.read()
+        input_path.write_bytes(content)
+
+        # Resolve preset to config
+        from app.core.preprocess import PreprocessConfig
+        if preset == "lecture":
+            config = PreprocessConfig(loudnorm=True, loudnorm_target=-16.0,
+                                      voice_isolation=True, denoise=True)
+        elif preset == "clean":
+            config = PreprocessConfig(loudnorm=True, loudnorm_target=-16.0,
+                                      voice_isolation=False, denoise=False)
+        else:  # custom
+            config = PreprocessConfig(
+                loudnorm=loudnorm,
+                loudnorm_target=loudnorm_target,
+                voice_isolation=voice_isolation,
+                denoise=denoise,
+            )
+
+        job = AudioLabJob(id=job_id, original_filename=file.filename or "upload")
+        _audiolab_jobs[job_id] = job
+
+        # Run pipeline in background
+        asyncio.create_task(_run_audiolab(job, input_path, cache_dir, config))
+
+        return {"job_id": job_id, "status": "processing"}
+
+    @app.post("/api/audiolab/cancel/{job_id}")
+    async def audiolab_cancel(job_id: str):
+        from fastapi import HTTPException
+        job = _audiolab_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if job.status in ("done", "error"):
+            raise HTTPException(status_code=409, detail="Job already finished")
+        job.cancelled = True
+        return {"status": "cancelling"}
+
+    @app.get("/api/audiolab/preview/{job_id}")
+    async def audiolab_preview(job_id: str, which: str = "original"):
+        from fastapi import HTTPException
+        job = _audiolab_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if which == "processed" and job.processed_48k_path and job.processed_48k_path.exists():
+            return FileResponse(str(job.processed_48k_path), media_type="audio/wav")
+        elif which == "original" and job.original_path and job.original_path.exists():
+            return FileResponse(str(job.original_path), media_type="audio/wav")
+        raise HTTPException(status_code=404, detail="File not ready")
+
+    @app.get("/api/audiolab/download/{job_id}")
+    async def audiolab_download(job_id: str):
+        from fastapi import HTTPException
+        job = _audiolab_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if not job.processed_path or not job.processed_path.exists():
+            raise HTTPException(status_code=404, detail="Processed file not ready")
+        name = f"{Path(job.original_filename).stem} (processed).wav"
+        return FileResponse(str(job.processed_path), filename=name, media_type="audio/wav")
+
+    @app.post("/api/audiolab/send-to-transcribe")
+    async def audiolab_send_to_transcribe(request: Request):
+        from fastapi import HTTPException
+        body = await request.json()
+        al_job_id = body.get("job_id")
+        al_job = _audiolab_jobs.get(al_job_id)
+        if not al_job or not al_job.processed_path:
+            raise HTTPException(status_code=404, detail="Audio Lab job not found or not done")
+
+        # Create a transcription job using the processed file
+        opts = TranscribeOptions(
+            model_id=settings.default_model or "whisper-1",
+            output_formats=settings.default_output_formats,
+            chunk_size_sec=settings.chunk_size_sec,
+        )
+        job = Job(
+            provider_name=settings.default_provider or "openai",
+            model_id=settings.default_model or "whisper-1",
+            input_files=[al_job.processed_path],
+            opts=opts,
+        )
+        queue.add(job)
+        asyncio.create_task(_run_job(job, settings, _get_providers(), history, _ws_manager))
+
+        filename = f"{Path(al_job.original_filename).stem} (processed).wav"
+        return {"transcription_job_id": job.id, "filename": filename}
+
+    async def _run_audiolab(job, input_path, cache_dir, config):
+        """Run the preprocessing pipeline in a background thread."""
+        from app.core.preprocess import run_pipeline
+        loop = asyncio.get_running_loop()
+
+        def _progress(frac, step, msg):
+            job.progress = frac
+            job.current_step = step
+            job.message = msg
+            loop.call_soon_threadsafe(
+                asyncio.ensure_future,
+                _ws_manager.broadcast_global({
+                    "type": "audiolab_progress",
+                    "job_id": job.id,
+                    "progress": frac,
+                    "step": step,
+                    "message": msg,
+                }),
+            )
+
+        cancel_flag = {"cancelled": False}
+
+        try:
+            def _run():
+                import threading, time
+                def _sync():
+                    while not cancel_flag.get("done"):
+                        cancel_flag["cancelled"] = job.cancelled
+                        time.sleep(0.5)
+                t = threading.Thread(target=_sync, daemon=True)
+                t.start()
+                try:
+                    return run_pipeline(
+                        input_path, cache_dir, config,
+                        progress_callback=_progress,
+                        cancel_flag=cancel_flag,
+                    )
+                finally:
+                    cancel_flag["done"] = True
+
+            result = await loop.run_in_executor(None, _run)
+
+            job.original_path = result.original_path
+            job.processed_path = result.processed_path
+            job.processed_48k_path = result.processed_48k_path
+            job.stats = result.stats
+
+            if result.cancelled:
+                job.status = "cancelled"
+                await _ws_manager.broadcast_global({
+                    "type": "audiolab_error",
+                    "job_id": job.id,
+                    "message": "Cancelled by user",
+                })
+            else:
+                job.status = "done"
+                await _ws_manager.broadcast_global({
+                    "type": "audiolab_done",
+                    "job_id": job.id,
+                    "original_url": f"/api/audiolab/preview/{job.id}?which=original",
+                    "processed_url": f"/api/audiolab/preview/{job.id}?which=processed",
+                    "stats": result.stats,
+                })
+
+        except Exception as exc:
+            logger.error("AudioLab %s failed: %s", job.id, exc, exc_info=True)
+            job.status = "error"
+            job.message = str(exc)
+            await _ws_manager.broadcast_global({
+                "type": "audiolab_error",
+                "job_id": job.id,
+                "message": str(exc),
+            })
+
+    # Audiolab cache cleanup
+    @app.on_event("startup")
+    async def _cleanup_old_audiolab_cache():
+        """Remove audiolab cache entries older than 24h."""
+        import time as _time
+        cache_root = Path(tempfile.gettempdir()) / "transcriber_audiolab"
+        if cache_root.exists():
+            cutoff = _time.time() - 86400
+            for d in cache_root.iterdir():
+                if d.is_dir() and d.stat().st_mtime < cutoff:
+                    shutil.rmtree(d, ignore_errors=True)
+
+    @app.on_event("shutdown")
+    async def _cleanup_audiolab_cache():
+        """Remove all audiolab cache on shutdown."""
+        cache_root = Path(tempfile.gettempdir()) / "transcriber_audiolab"
+        if cache_root.exists():
+            shutil.rmtree(cache_root, ignore_errors=True)
 
     return app
 
