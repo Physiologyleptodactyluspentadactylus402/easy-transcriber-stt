@@ -658,6 +658,14 @@ async def _run_audiolab_install(
     def _do_install():
         _send(0.05, f"Installing {pkg['label']}...")
 
+        # Ensure Rust/Cargo is in PATH if installed (rustup adds to system
+        # PATH but already-running processes don't see it until restarted)
+        import os
+        env = os.environ.copy()
+        cargo_bin = Path.home() / ".cargo" / "bin"
+        if cargo_bin.is_dir() and str(cargo_bin) not in env.get("PATH", ""):
+            env["PATH"] = str(cargo_bin) + os.pathsep + env.get("PATH", "")
+
         # Stream pip output line-by-line for real progress updates
         proc = subprocess.Popen(
             [sys.executable, "-m", "pip", "install", pkg["pip"],
@@ -666,6 +674,7 @@ async def _run_audiolab_install(
             stderr=subprocess.STDOUT,  # merge stderr into stdout to avoid deadlock
             text=True,
             bufsize=1,  # line-buffered
+            env=env,
         )
         lines_seen = 0
         last_lines = []  # keep last few lines for error diagnosis
