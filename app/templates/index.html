@@ -566,17 +566,31 @@
               </div>
             </div>
             <!-- Voice Isolation -->
-            <label class="flex items-center gap-2 text-sm text-gray-300">
-              <input type="checkbox" x-model="alVoiceIsolation" :disabled="alPreset!=='custom'"
-                     class="w-4 h-4 rounded border-gray-600 bg-gray-800 text-indigo-500">
-              <span x-text="t('audiolab_voice_isolation')"></span>
-            </label>
+            <div class="flex items-center justify-between">
+              <label class="flex items-center gap-2 text-sm text-gray-300">
+                <input type="checkbox" x-model="alVoiceIsolation" :disabled="alPreset!=='custom'"
+                       class="w-4 h-4 rounded border-gray-600 bg-gray-800 text-indigo-500">
+                <span x-text="t('audiolab_voice_isolation')"></span>
+              </label>
+              <button x-show="!alDeps.demucs" @click="alOpenInstallModal('demucs')"
+                      class="text-xs px-2 py-0.5 rounded bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 transition-colors cursor-pointer">
+                Install
+              </button>
+              <span x-show="alDeps.demucs" class="text-xs text-green-500/60">✓</span>
+            </div>
             <!-- Denoise -->
-            <label class="flex items-center gap-2 text-sm text-gray-300">
-              <input type="checkbox" x-model="alDenoise" :disabled="alPreset!=='custom'"
-                     class="w-4 h-4 rounded border-gray-600 bg-gray-800 text-indigo-500">
-              <span x-text="t('audiolab_denoise')"></span>
-            </label>
+            <div class="flex items-center justify-between">
+              <label class="flex items-center gap-2 text-sm text-gray-300">
+                <input type="checkbox" x-model="alDenoise" :disabled="alPreset!=='custom'"
+                       class="w-4 h-4 rounded border-gray-600 bg-gray-800 text-indigo-500">
+                <span x-text="t('audiolab_denoise')"></span>
+              </label>
+              <button x-show="!alDeps.deepfilter" @click="alOpenInstallModal('deepfilter')"
+                      class="text-xs px-2 py-0.5 rounded bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 transition-colors cursor-pointer">
+                Install
+              </button>
+              <span x-show="alDeps.deepfilter" class="text-xs text-green-500/60">✓</span>
+            </div>
           </div>
 
           <!-- Process / Cancel + Progress -->

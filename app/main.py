@@ -157,6 +157,30 @@ def create_app(
         import shutil
         return {"available": shutil.which("ffmpeg") is not None}
 
+    # ── Audio Lab dependency management ───────────────────────────
+    @app.get("/api/audiolab/deps")
+    async def audiolab_deps():
+        """Return installation status of optional Audio Lab tools."""
+        from app.core.preprocess import _DEMUCS_AVAILABLE, _DEEPFILTER_AVAILABLE
+        return {
+            "demucs": _DEMUCS_AVAILABLE,
+            "deepfilter": _DEEPFILTER_AVAILABLE,
+        }
+
+    _AUDIOLAB_PACKAGES = {
+        "demucs": {"pip": "demucs>=4.0.0", "label": "Demucs", "size": "~2 GB (includes PyTorch)"},
+        "deepfilter": {"pip": "deepfilternet>=0.5.0", "label": "DeepFilterNet", "size": "~200 MB (requires Rust toolchain)"},
+    }
+
+    @app.post("/api/audiolab/install/{tool_name}")
+    async def audiolab_install(tool_name: str):
+        from fastapi import HTTPException
+        pkg = _AUDIOLAB_PACKAGES.get(tool_name)
+        if not pkg:
+            raise HTTPException(status_code=404, detail=f"Unknown tool: {tool_name}")
+        asyncio.create_task(_run_audiolab_install(tool_name, pkg, _ws_manager))
+        return {"ok": True}
+
     @app.get("/api/download")
     async def download_file(path: str):
         from fastapi import HTTPException
@@ -601,6 +625,72 @@ async def _run_install(
         await ws_manager.broadcast_global({
             "type": "install_done",
             "package": provider_name,
+            "success": False,
+            "error": str(exc),
+        })
+
+
+async def _run_audiolab_install(
+    tool_name: str,
+    pkg: dict,
+    ws_manager,
+) -> None:
+    """Install an Audio Lab dependency (demucs / deepfilter) via pip."""
+    import subprocess, sys
+    loop = asyncio.get_running_loop()
+
+    def _do_install():
+        ws_manager_ref = ws_manager
+        _loop = loop
+
+        def _progress(prog, msg):
+            _loop.call_soon_threadsafe(
+                asyncio.ensure_future,
+                ws_manager_ref.broadcast_global({
+                    "type": "install_progress",
+                    "package": tool_name,
+                    "progress": prog,
+                    "message": msg,
+                }),
+            )
+
+        _progress(0.1, f"Installing {pkg['label']}...")
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", pkg["pip"]],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        _progress(0.9, "Verifying import...")
+
+        # Re-check availability after install
+        import importlib
+        if tool_name == "demucs":
+            importlib.import_module("demucs")
+        elif tool_name == "deepfilter":
+            importlib.import_module("df")
+
+        _progress(1.0, "Done")
+
+    try:
+        await loop.run_in_executor(None, _do_install)
+        # Update the flags in preprocess module so they reflect new state
+        import app.core.preprocess as _pp
+        if tool_name == "demucs":
+            _pp._DEMUCS_AVAILABLE = True
+        elif tool_name == "deepfilter":
+            _pp._DEEPFILTER_AVAILABLE = True
+
+        await ws_manager.broadcast_global({
+            "type": "install_done",
+            "package": tool_name,
+            "success": True,
+            "error": None,
+        })
+    except Exception as exc:
+        logger.error("Install audiolab tool %s failed: %s", tool_name, exc, exc_info=True)
+        await ws_manager.broadcast_global({
+            "type": "install_done",
+            "package": tool_name,
             "success": False,
             "error": str(exc),
         })

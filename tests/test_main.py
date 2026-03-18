@@ -187,3 +187,27 @@ def test_audiolab_download_unknown_job(client):
     """GET /api/audiolab/download/{job_id} returns 404 for unknown job."""
     response = client.get("/api/audiolab/download/nonexistent-id")
     assert response.status_code == 404
+
+
+def test_audiolab_deps_returns_booleans(client):
+    """GET /api/audiolab/deps returns demucs and deepfilter availability."""
+    r = client.get("/api/audiolab/deps")
+    assert r.status_code == 200
+    data = r.json()
+    assert "demucs" in data
+    assert "deepfilter" in data
+    assert isinstance(data["demucs"], bool)
+    assert isinstance(data["deepfilter"], bool)
+
+
+def test_audiolab_install_unknown_tool(client):
+    """POST /api/audiolab/install/unknown returns 404."""
+    r = client.post("/api/audiolab/install/nonexistent")
+    assert r.status_code == 404
+
+
+def test_audiolab_install_known_tool(client):
+    """POST /api/audiolab/install/demucs returns 200 and starts install."""
+    r = client.post("/api/audiolab/install/demucs")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True

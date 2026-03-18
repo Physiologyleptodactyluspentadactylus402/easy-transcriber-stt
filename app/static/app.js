@@ -72,6 +72,7 @@ function app() {
     alVolume: 1.0,
     alOriginalUrl: null,
     alProcessedUrl: null,
+    alDeps: { demucs: false, deepfilter: false },  // availability of optional tools
 
     // WebSocket
     _ws: null,
@@ -85,6 +86,7 @@ function app() {
       await this.loadHistory();
       this._connectWs();
       await this._checkFfmpeg();
+      await this._loadAudioLabDeps();
       this._updateLiveProviders();
 
       // Audio Lab keyboard shortcuts (scoped)
@@ -258,6 +260,7 @@ function app() {
           setTimeout(() => {
             this.closeInstallModal();
             this.loadProviders();
+            this._loadAudioLabDeps();  // refresh Audio Lab tool availability
           }, 1500);
         } else {
           this.installError = msg.error || this.t('install_done_error');
@@ -372,7 +375,10 @@ function app() {
         this.installProgress = 0;
         this.installError = null;
         try {
-            const r = await fetch(`/api/install/${this.installModal.providerName}`, { method: 'POST' });
+            const endpoint = this.installModal.isAudioLabTool
+                ? `/api/audiolab/install/${this.installModal.providerName}`
+                : `/api/install/${this.installModal.providerName}`;
+            const r = await fetch(endpoint, { method: 'POST' });
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
         } catch (e) {
             this.installing = false;
@@ -397,6 +403,36 @@ function app() {
       } catch (_) {
         this.ffmpegAvailable = false;
       }
+    },
+
+    async _loadAudioLabDeps() {
+      try {
+        const r = await fetch('/api/audiolab/deps');
+        this.alDeps = await r.json();
+      } catch (_) {
+        this.alDeps = { demucs: false, deepfilter: false };
+      }
+    },
+
+    alOpenInstallModal(toolName) {
+      const labels = {
+        demucs: 'Demucs (Voice Isolation)',
+        deepfilter: 'DeepFilterNet (Denoise)',
+      };
+      const sizes = {
+        demucs: '~2 GB (includes PyTorch)',
+        deepfilter: '~200 MB (requires Rust toolchain)',
+      };
+      this.installModal = {
+        providerName: toolName,
+        providerLabel: labels[toolName] || toolName,
+        packages: sizes[toolName] || null,
+        isAudioLabTool: true,
+      };
+      this.installing = false;
+      this.installProgress = 0;
+      this.installMessage = '';
+      this.installError = null;
     },
 
     _updateLiveProviders() {
@@ -562,8 +598,23 @@ function app() {
       return this.alFile && (this.alLoudnorm || this.alVoiceIsolation || this.alDenoise);
     },
 
+    alMissingDep() {
+      // Returns the name of the first missing dep required by current settings, or null
+      const needsDemucs = this.alVoiceIsolation && !this.alDeps.demucs;
+      const needsDeepfilter = this.alDenoise && !this.alDeps.deepfilter;
+      if (needsDemucs) return 'demucs';
+      if (needsDeepfilter) return 'deepfilter';
+      return null;
+    },
+
     async alProcess() {
       if (!this.alFile || this.alStatus === 'processing') return;
+      // Check if a required tool is missing — prompt install
+      const missing = this.alMissingDep();
+      if (missing) {
+        this.alOpenInstallModal(missing);
+        return;
+      }
       const formData = new FormData();
       formData.append('file', this.alFile);
       formData.append('preset', this.alPreset);
