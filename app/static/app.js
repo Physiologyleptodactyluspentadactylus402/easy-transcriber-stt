@@ -27,6 +27,7 @@ function app() {
 
     // Wizard
     showWizard: !window.APP_WIZARD_COMPLETE,
+    wizardStep: 'choose',
 
     // ── Install modal state ──────────────────────────────────────
     installModal: null,   // { providerName, providerLabel, packages } or null
@@ -265,9 +266,33 @@ function app() {
       this.historyItems = this.historyItems.filter(h => h.id !== id);
     },
 
+    async saveApiKey(provider, key) {
+      if (!key) return;
+      const r = await fetch('/api/apikey', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, key }),
+      });
+      const data = await r.json();
+      if (data.ok) {
+        this.settings.openai_key_set = data.openai_key_set;
+        this.settings.elevenlabs_key_set = data.elevenlabs_key_set;
+        // Refresh providers so availability updates
+        await this.loadProviders();
+      }
+    },
+
+    async saveApiKeyAndFinishWizard(provider, key) {
+      if (key) {
+        await this.saveApiKey(provider, key);
+      }
+      await this.completeWizard(provider);
+    },
+
     async completeWizard(setupType) {
       await this.saveSettings({ wizard_complete: true });
       this.showWizard = false;
+      this.wizardStep = 'choose';
     },
 
     openInstallModal(provider) {

@@ -79,5 +79,14 @@
   "provider_unavailable": "Non disponibile",
   "provider_needs_key": "Chiave API necessaria \u2192 Impostazioni",
   "settings_local_models": "Modelli locali",
-  "settings_local_models_desc": "Modelli eseguiti interamente sul tuo computer — nessuna chiave API necessaria."
+  "settings_local_models_desc": "Modelli eseguiti interamente sul tuo computer — nessuna chiave API necessaria.",
+  "settings_save_key": "Salva",
+  "settings_key_placeholder": "Incolla la tua chiave API qui…",
+  "settings_key_active": "Chiave salvata",
+  "settings_key_not_set": "Non configurata",
+  "settings_keys_stored_in_env": "Le chiavi sono salvate localmente nel file .env — inviate solo al provider scelto.",
+  "wizard_enter_key": "Incolla la tua chiave API qui sotto. Verrà salvata localmente nel file .env.",
+  "wizard_get_key": "Ottieni la tua chiave API →",
+  "wizard_back": "← Indietro",
+  "wizard_save_and_start": "Salva e inizia"
 }

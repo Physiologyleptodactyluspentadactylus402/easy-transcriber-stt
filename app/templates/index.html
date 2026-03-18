@@ -22,26 +22,77 @@
   <!-- First-run Wizard Modal -->
   <div x-show="showWizard" class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
     <div class="bg-gray-900 border border-gray-700 rounded-xl p-8 max-w-md w-full shadow-2xl">
-      <h2 class="text-xl font-bold mb-2" x-text="t('wizard_title')"></h2>
-      <p class="text-gray-400 text-sm mb-6" x-text="t('wizard_setup_type')"></p>
-      <div class="space-y-3">
-        <button @click="completeWizard('openai')"
-                class="w-full text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">
-          🟢 <span x-text="t('wizard_openai')"></span>
-        </button>
-        <button @click="completeWizard('elevenlabs')"
-                class="w-full text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">
-          💜 <span x-text="t('wizard_elevenlabs')"></span>
-        </button>
-        <button @click="completeWizard('local')"
-                class="w-full text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">
-          ⚡ <span x-text="t('wizard_local')"></span>
-        </button>
-        <button @click="completeWizard('later')"
-                class="w-full text-left px-4 py-3 text-gray-500 hover:text-gray-300 text-sm transition-colors">
-          <span x-text="t('wizard_decide_later')"></span>
-        </button>
-      </div>
+
+      <!-- Step 1: Choose provider type -->
+      <template x-if="!wizardStep || wizardStep === 'choose'">
+        <div>
+          <h2 class="text-xl font-bold mb-2" x-text="t('wizard_title')"></h2>
+          <p class="text-gray-400 text-sm mb-6" x-text="t('wizard_setup_type')"></p>
+          <div class="space-y-3">
+            <button @click="wizardStep='openai_key'"
+                    class="w-full text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">
+              🟢 <span x-text="t('wizard_openai')"></span>
+            </button>
+            <button @click="wizardStep='elevenlabs_key'"
+                    class="w-full text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">
+              💜 <span x-text="t('wizard_elevenlabs')"></span>
+            </button>
+            <button @click="completeWizard('local')"
+                    class="w-full text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">
+              ⚡ <span x-text="t('wizard_local')"></span>
+            </button>
+            <button @click="completeWizard('later')"
+                    class="w-full text-left px-4 py-3 text-gray-500 hover:text-gray-300 text-sm transition-colors">
+              <span x-text="t('wizard_decide_later')"></span>
+            </button>
+          </div>
+        </div>
+      </template>
+
+      <!-- Step 2: OpenAI API Key -->
+      <template x-if="wizardStep === 'openai_key'">
+        <div>
+          <h2 class="text-xl font-bold mb-2">OpenAI API Key</h2>
+          <p class="text-gray-400 text-sm mb-4" x-text="t('wizard_enter_key')"></p>
+          <input type="password" x-ref="wizardOpenaiKey"
+                 :placeholder="t('settings_key_placeholder')"
+                 @keydown.enter="saveApiKeyAndFinishWizard('openai', $refs.wizardOpenaiKey.value)"
+                 class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm text-gray-300 focus:border-indigo-500 focus:outline-none mb-2">
+          <p class="text-xs text-gray-600 mb-4">
+            <a href="https://platform.openai.com/api-keys" target="_blank" class="text-indigo-400 hover:underline" x-text="t('wizard_get_key')"></a>
+          </p>
+          <div class="flex gap-3">
+            <button @click="wizardStep='choose'"
+                    class="px-4 py-2 text-gray-400 hover:text-white text-sm" x-text="t('wizard_back')"></button>
+            <button @click="saveApiKeyAndFinishWizard('openai', $refs.wizardOpenaiKey.value)"
+                    class="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm rounded-lg font-medium"
+                    x-text="t('wizard_save_and_start')"></button>
+          </div>
+        </div>
+      </template>
+
+      <!-- Step 2: ElevenLabs API Key -->
+      <template x-if="wizardStep === 'elevenlabs_key'">
+        <div>
+          <h2 class="text-xl font-bold mb-2">ElevenLabs API Key</h2>
+          <p class="text-gray-400 text-sm mb-4" x-text="t('wizard_enter_key')"></p>
+          <input type="password" x-ref="wizardElevenlabsKey"
+                 :placeholder="t('settings_key_placeholder')"
+                 @keydown.enter="saveApiKeyAndFinishWizard('elevenlabs', $refs.wizardElevenlabsKey.value)"
+                 class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm text-gray-300 focus:border-indigo-500 focus:outline-none mb-2">
+          <p class="text-xs text-gray-600 mb-4">
+            <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" class="text-indigo-400 hover:underline" x-text="t('wizard_get_key')"></a>
+          </p>
+          <div class="flex gap-3">
+            <button @click="wizardStep='choose'"
+                    class="px-4 py-2 text-gray-400 hover:text-white text-sm" x-text="t('wizard_back')"></button>
+            <button @click="saveApiKeyAndFinishWizard('elevenlabs', $refs.wizardElevenlabsKey.value)"
+                    class="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm rounded-lg font-medium"
+                    x-text="t('wizard_save_and_start')"></button>
+          </div>
+        </div>
+      </template>
+
     </div>
   </div>
 
@@ -383,22 +434,41 @@
           <div>
             <div class="text-xs uppercase text-gray-500 font-semibold mb-3"
                  x-text="t('settings_api_keys')"></div>
-            <div class="space-y-3">
+            <div class="space-y-4">
+
+              <!-- OpenAI API Key -->
               <div>
                 <label class="text-xs text-gray-400" x-text="t('settings_openai_key')"></label>
                 <div class="flex gap-2 mt-1">
-                  <div class="flex-1 bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-xs text-gray-400"
-                       x-text="settings.openai_key_set ? 'sk-...set' : 'Not configured'"></div>
+                  <input type="password" :placeholder="settings.openai_key_set ? 'sk-••••••••••••••••(set)' : t('settings_key_placeholder')"
+                         x-ref="openaiKeyInput"
+                         class="flex-1 bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-300 focus:border-indigo-500 focus:outline-none">
+                  <button @click="saveApiKey('openai', $refs.openaiKeyInput.value); $refs.openaiKeyInput.value=''"
+                          class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs rounded-md font-medium"
+                          x-text="t('settings_save_key')"></button>
                 </div>
+                <div class="mt-1 text-xs"
+                     :class="settings.openai_key_set ? 'text-green-500' : 'text-gray-600'"
+                     x-text="settings.openai_key_set ? '✓ ' + t('settings_key_active') : t('settings_key_not_set')"></div>
               </div>
+
+              <!-- ElevenLabs API Key -->
               <div>
                 <label class="text-xs text-gray-400" x-text="t('settings_elevenlabs_key')"></label>
                 <div class="flex gap-2 mt-1">
-                  <div class="flex-1 bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-xs text-gray-400"
-                       x-text="settings.elevenlabs_key_set ? '...set' : 'Not configured'"></div>
+                  <input type="password" :placeholder="settings.elevenlabs_key_set ? '••••••••••••••••(set)' : t('settings_key_placeholder')"
+                         x-ref="elevenlabsKeyInput"
+                         class="flex-1 bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-300 focus:border-indigo-500 focus:outline-none">
+                  <button @click="saveApiKey('elevenlabs', $refs.elevenlabsKeyInput.value); $refs.elevenlabsKeyInput.value=''"
+                          class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs rounded-md font-medium"
+                          x-text="t('settings_save_key')"></button>
                 </div>
+                <div class="mt-1 text-xs"
+                     :class="settings.elevenlabs_key_set ? 'text-green-500' : 'text-gray-600'"
+                     x-text="settings.elevenlabs_key_set ? '✓ ' + t('settings_key_active') : t('settings_key_not_set')"></div>
               </div>
-              <p class="text-xs text-gray-600">Keys are stored in <code>.env</code> in the project folder.</p>
+
+              <p class="text-xs text-gray-600" x-text="t('settings_keys_stored_in_env')"></p>
             </div>
           </div>
 

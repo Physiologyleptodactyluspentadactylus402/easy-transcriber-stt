@@ -79,5 +79,14 @@
   "provider_unavailable": "Unavailable",
   "provider_needs_key": "API key required \u2192 Settings",
   "settings_local_models": "Local Models",
-  "settings_local_models_desc": "Models that run entirely on your machine — no API key needed."
+  "settings_local_models_desc": "Models that run entirely on your machine — no API key needed.",
+  "settings_save_key": "Save",
+  "settings_key_placeholder": "Paste your API key here…",
+  "settings_key_active": "Key saved",
+  "settings_key_not_set": "Not configured",
+  "settings_keys_stored_in_env": "Keys are stored locally in the .env file — never sent anywhere except to the provider.",
+  "wizard_enter_key": "Paste your API key below. It will be saved locally in your .env file.",
+  "wizard_get_key": "Get your API key →",
+  "wizard_back": "← Back",
+  "wizard_save_and_start": "Save & Start"
 }

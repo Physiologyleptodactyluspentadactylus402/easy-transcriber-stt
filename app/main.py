@@ -114,6 +114,22 @@ def create_app(
         settings.save()
         return {"ok": True}
 
+    @app.post("/api/apikey")
+    async def set_api_key(body: dict):
+        """Save an API key to .env and update the current process."""
+        provider = body.get("provider", "")
+        key = body.get("key", "").strip()
+        try:
+            settings.set_api_key(provider, key)
+        except ValueError as exc:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {
+            "ok": True,
+            "openai_key_set": bool(settings.openai_api_key),
+            "elevenlabs_key_set": bool(settings.elevenlabs_api_key),
+        }
+
     @app.get("/api/history")
     async def get_history():
         return history.list()

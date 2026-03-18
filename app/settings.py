@@ -5,6 +5,7 @@ from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).parent.parent
 _SETTINGS_PATH = _PROJECT_ROOT / "settings.json"
+_ENV_PATH = _PROJECT_ROOT / ".env"
 _DB_PATH = _PROJECT_ROOT / "app" / "transcriber.db"
 _LIVE_OUTPUT_DEFAULT = Path.home() / "Documents" / "Transcriber"
 
@@ -52,6 +53,56 @@ class Settings:
     @property
     def db_path(self) -> Path:
         return _DB_PATH
+
+    # ------------------------------------------------------------------
+    # API-key persistence  (.env file)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _read_env() -> dict[str, str]:
+        """Parse the .env file into a dict (simple KEY=VALUE format)."""
+        env: dict[str, str] = {}
+        if _ENV_PATH.exists():
+            for line in _ENV_PATH.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    # Strip optional surrounding quotes
+                    value = value.strip().strip("'\"")
+                    env[key.strip()] = value
+        return env
+
+    @staticmethod
+    def _write_env(env: dict[str, str]) -> None:
+        """Write the dict back to .env (preserving simple KEY=VALUE format)."""
+        lines = [f"{k}={v}" for k, v in env.items() if v]
+        _ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def set_api_key(self, provider: str, key: str) -> None:
+        """Persist an API key to .env and update the current process env."""
+        var_map = {
+            "openai": "OPENAI_API_KEY",
+            "elevenlabs": "ELEVENLABS_API_KEY",
+        }
+        env_var = var_map.get(provider)
+        if not env_var:
+            raise ValueError(f"Unknown API-key provider: {provider}")
+
+        # Update .env file
+        env = self._read_env()
+        if key:
+            env[env_var] = key
+        else:
+            env.pop(env_var, None)
+        self._write_env(env)
+
+        # Also set in current process so it takes effect immediately
+        if key:
+            os.environ[env_var] = key
+        else:
+            os.environ.pop(env_var, None)
 
     def resolve_output_dir(self, input_file: Path | None = None) -> Path:
         """Return the effective output directory for a job."""

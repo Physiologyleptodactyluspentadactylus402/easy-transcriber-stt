@@ -79,9 +79,20 @@ def load_dotenv():
         try:
             from dotenv import load_dotenv as _load
             _load(env_file)
-            print("[ok] .env loaded")
+            print("[ok] .env loaded (python-dotenv)")
         except ImportError:
-            pass
+            # Fallback: parse KEY=VALUE ourselves so API keys work
+            # even without python-dotenv installed.
+            import os
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    value = value.strip().strip("'\"")
+                    os.environ.setdefault(key.strip(), value)
+            print("[ok] .env loaded (builtin parser)")
 
 
 def main():
