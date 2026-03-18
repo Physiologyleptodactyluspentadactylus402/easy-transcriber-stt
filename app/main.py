@@ -685,13 +685,22 @@ async def _run_audiolab_install(
         returncode = proc.wait()
         if returncode != 0:
             # Build a helpful error message from pip output
-            output_tail = "\n".join(last_lines[-5:])
-            if "cargo" in output_tail.lower() or "rust" in output_tail.lower():
+            all_output = "\n".join(last_lines).lower()
+            # DeepFilterNet needs Rust — detect various failure signatures
+            needs_rust = (
+                "cargo" in all_output
+                or "rust" in all_output
+                or "deepfilterlib" in all_output
+                or "maturin" in all_output
+            )
+            if needs_rust and tool_name == "deepfilter":
                 raise RuntimeError(
-                    f"DeepFilterNet requires the Rust compiler to build.\n"
-                    f"Install Rust from https://rustup.rs and restart, "
-                    f"then try again."
+                    "DeepFilterNet requires the Rust compiler to build.\n"
+                    "1. Install Rust: https://rustup.rs\n"
+                    "2. Restart the app\n"
+                    "3. Try again"
                 )
+            output_tail = "\n".join(last_lines[-5:])
             raise RuntimeError(
                 f"pip install failed (exit code {returncode}):\n{output_tail}"
             )
