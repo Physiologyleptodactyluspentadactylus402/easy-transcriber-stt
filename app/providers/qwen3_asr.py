@@ -94,21 +94,33 @@ class Qwen3ASRProvider(BaseProvider):
         if progress_callback:
             progress_callback(1.0, "Dependencies installed.")
 
+    @staticmethod
+    def _best_device() -> tuple[str, "torch.dtype"]:
+        """Pick the best available accelerator: CUDA > XPU (Intel Arc) > CPU."""
+        if torch is None:
+            return "cpu", None                          # type: ignore[return-value]
+        if torch.cuda.is_available():
+            return "cuda:0", torch.bfloat16
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
+            # Intel Arc GPUs support float16; bfloat16 may work on newer
+            # drivers but float16 is the safer default.
+            return "xpu:0", torch.float16
+        return "cpu", torch.float32
+
     def _load_model(self, model_id: str) -> object:
         """Load a Qwen3ASRModel, caching by model_id."""
         if model_id not in self._model_cache:
             hf_id = _HF_MODEL_IDS.get(model_id, model_id)
-            has_cuda = torch is not None and torch.cuda.is_available()
-            device_map = "cuda:0" if has_cuda else "cpu"
+            device_map, dtype = self._best_device()
 
             kwargs: dict = {
                 "device_map": device_map,
                 "max_new_tokens": 512,
             }
-            if torch is not None:
-                kwargs["dtype"] = torch.bfloat16 if has_cuda else torch.float32
+            if dtype is not None:
+                kwargs["dtype"] = dtype
 
-            logger.info("Loading Qwen3-ASR model %s on %s …", hf_id, device_map)
+            logger.info("Loading Qwen3-ASR model %s on %s (dtype=%s) …", hf_id, device_map, dtype)
             self._model_cache[model_id] = Qwen3ASRModel.from_pretrained(
                 hf_id, **kwargs,
             )
