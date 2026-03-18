@@ -63,7 +63,7 @@ class PreprocessConfig:
 ```python
 def _apply_denoise_ffmpeg(wav_path: Path, output_path: Path) -> Path:
     """Denoise using ffmpeg's afftdn filter, optimized for speech."""
-    ffmpeg = _find_ffmpeg()
+    ffmpeg = _require_ffmpeg()
     cmd = [
         ffmpeg, "-y", "-i", str(wav_path),
         "-af", "afftdn=nf=-25:tn=1",
@@ -101,7 +101,7 @@ Current `apply_denoise()` body moves to `_apply_denoise_deepfilter()` (private).
 
 ```python
 if config.denoise:
-    engine_label = "deepfilter" if config.denoise_engine == "deepfilter" else "ffmpeg-denoise"
+    engine_label = "deepfilter" if config.denoise_engine == "deepfilter" else "ffmpeg_denoise"
     _progress(0.7, engine_label, "Removing noise...")
     denoised = work_dir / "step3_denoised.wav"
     apply_denoise(current, denoised, engine=config.denoise_engine)
@@ -119,7 +119,24 @@ Add `denoise_engine` form parameter:
 denoise_engine: str = Form("ffmpeg"),
 ```
 
-Pass to PreprocessConfig for all presets (preset determines whether denoise is on/off; engine is always from form param).
+All three preset branches must pass this parameter:
+
+```python
+if preset == "lecture":
+    config = PreprocessConfig(loudnorm=True, loudnorm_target=-16.0,
+                              voice_isolation=True, denoise=True,
+                              denoise_engine=denoise_engine)
+elif preset == "clean":
+    config = PreprocessConfig(loudnorm=True, loudnorm_target=-16.0,
+                              voice_isolation=False, denoise=False,
+                              denoise_engine=denoise_engine)
+else:  # custom
+    config = PreprocessConfig(
+        loudnorm=loudnorm, loudnorm_target=loudnorm_target,
+        voice_isolation=voice_isolation, denoise=denoise,
+        denoise_engine=denoise_engine,
+    )
+```
 
 #### `/api/audiolab/deps` endpoint
 
@@ -141,7 +158,9 @@ alDenoiseEngine: "ffmpeg",  // "ffmpeg" or "deepfilter" — global preference
 
 #### Persistence
 
-`alDenoiseEngine` is saved/loaded from settings (existing `/api/settings` mechanism) so it persists across sessions.
+`alDenoiseEngine` is saved/loaded from settings (existing `/api/settings` mechanism) so it persists across sessions. This requires:
+- Adding `"denoise_engine"` to the `allowed` set in `PATCH /api/settings` (in `app/main.py`)
+- Including `denoise_engine` in the `GET /api/settings` response with default `"ffmpeg"`
 
 #### `alProcess()` change
 
@@ -180,8 +199,9 @@ Visible only when denoise is enabled. Two pill buttons:
 
 - `ffmpeg` pill: always selectable, default active
 - `DeepFilterNet` pill: selectable only if `alDeps.deepfilter` is true; if not installed, clicking opens install guide
-- Lock icon 🔒 shown only when DeepFilterNet is not installed
-- "How to install ↗" link: visible only when DeepFilterNet is not installed, opens install guide modal
+- Lock icon shown only when DeepFilterNet is not installed
+- "How to install" link: visible only when DeepFilterNet is not installed, opens install guide modal
+- **The existing Install/checkmark badge next to the denoise checkbox is removed** — the engine selector pills replace its functionality entirely
 
 #### Install guide modal
 
@@ -218,11 +238,15 @@ The "Install DeepFilterNet" button in the modal triggers the existing `/api/audi
 
 ### New keys (both en.json and it.json)
 
+#### English (`en.json`)
+
 ```json
 {
+  "audiolab_denoise": "Denoise",
   "audiolab_denoise_engine_ffmpeg": "ffmpeg (lightweight)",
   "audiolab_denoise_engine_deepfilter": "DeepFilterNet (advanced)",
   "audiolab_denoise_howto": "How to install",
+  "audiolab_step_ffmpeg_denoise": "FFmpeg Denoise",
   "audiolab_deepfilter_guide_title": "Install DeepFilterNet",
   "audiolab_deepfilter_guide_intro": "DeepFilterNet provides state-of-the-art noise reduction using deep learning. It requires build tools to compile.",
   "audiolab_deepfilter_guide_step1_title": "Step 1: Install Visual Studio Build Tools",
@@ -237,7 +261,30 @@ The "Install DeepFilterNet" button in the modal triggers the existing `/api/audi
 }
 ```
 
-Italian translations follow the same pattern with localized text.
+#### Italian (`it.json`)
+
+```json
+{
+  "audiolab_denoise": "Riduzione rumore",
+  "audiolab_denoise_engine_ffmpeg": "ffmpeg (leggero)",
+  "audiolab_denoise_engine_deepfilter": "DeepFilterNet (avanzato)",
+  "audiolab_denoise_howto": "Come installare",
+  "audiolab_step_ffmpeg_denoise": "Riduzione rumore FFmpeg",
+  "audiolab_deepfilter_guide_title": "Installa DeepFilterNet",
+  "audiolab_deepfilter_guide_intro": "DeepFilterNet offre una riduzione del rumore all'avanguardia tramite deep learning. Richiede strumenti di compilazione.",
+  "audiolab_deepfilter_guide_step1_title": "Passo 1: Installa Visual Studio Build Tools",
+  "audiolab_deepfilter_guide_step1_body": "Scarica da visualstudio.microsoft.com e seleziona \"Sviluppo di applicazioni desktop con C++\"",
+  "audiolab_deepfilter_guide_step2_title": "Passo 2: Installa Rust",
+  "audiolab_deepfilter_guide_step2_body": "Visita rustup.rs e avvia l'installer",
+  "audiolab_deepfilter_guide_step3_title": "Passo 3: Riavvia l'app",
+  "audiolab_deepfilter_guide_step3_body": "Chiudi e riapri Transcriber",
+  "audiolab_deepfilter_guide_step4_title": "Passo 4: Installa il pacchetto",
+  "audiolab_deepfilter_guide_install_btn": "Installa DeepFilterNet",
+  "audiolab_deepfilter_guide_warning": "Richiede ~8 GB di spazio su disco in totale"
+}
+```
+
+**Note:** The existing `audiolab_denoise` key is updated to remove the "(DeepFilterNet)" parenthetical since the engine is now selectable separately.
 
 ## 7. Tests
 
@@ -262,7 +309,7 @@ Existing `TestApplyDenoise` tests are updated to use `engine="deepfilter"` expli
 | File | Change |
 |------|--------|
 | `app/core/preprocess.py` | Add `_apply_denoise_ffmpeg()`, refactor `apply_denoise()` as dispatcher, add `denoise_engine` to `PreprocessConfig` |
-| `app/main.py` | Add `denoise_engine` form param to `/api/audiolab/process` |
+| `app/main.py` | Add `denoise_engine` form param to `/api/audiolab/process`, add `denoise_engine` to settings allowlist |
 | `app/templates/index.html` | Add engine selector pills, install guide modal, "How to install" link |
 | `app/static/app.js` | Add `alDenoiseEngine` state, `alShowInstallGuide()`, persist engine preference |
 | `app/locales/en.json` | Add ~13 new denoise engine/guide strings |
