@@ -119,6 +119,9 @@
       <button @click="currentSection='history'"
               :class="currentSection==='history' ? 'active' : ''"
               class="sidebar-icon" title="History">📋</button>
+      <button @click="currentSection='audiolab'"
+              :class="currentSection==='audiolab' ? 'active' : ''"
+              class="sidebar-icon" :title="t('nav_audiolab')">🧪</button>
 
       <div class="flex-1"></div>
 
@@ -497,6 +500,169 @@
               Run setup wizard again
             </button>
           </div>
+
+        </div>
+      </div>
+
+      <!-- AUDIO LAB SECTION -->
+      <div x-show="currentSection==='audiolab'" x-cloak class="flex flex-col h-full">
+        <!-- Header -->
+        <div class="px-4 py-3 border-b border-gray-800 flex-shrink-0">
+          <div class="font-semibold text-sm" x-text="t('nav_audiolab')"></div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+
+          <!-- Drop zone -->
+          <div class="border-2 border-dashed border-gray-700 rounded-xl p-6 text-center
+                      hover:border-indigo-500 transition-colors cursor-pointer"
+               @dragover.prevent
+               @drop.prevent="alHandleFile($event)"
+               @click="$refs.alFileInput.click()">
+            <div class="text-2xl mb-1">🎵</div>
+            <div class="text-sm text-gray-400" x-show="!alFile">
+              <span x-text="t('audiolab_drop_prompt')"></span>
+              <span class="text-indigo-400 underline cursor-pointer" x-text="t('audiolab_drop_browse')"></span>
+            </div>
+            <div class="text-sm text-white" x-show="alFile" x-text="alFile?.name"></div>
+            <input type="file" class="hidden" x-ref="alFileInput"
+                   accept=".mp3,.m4a,.mp4,.wav,.ogg,.flac,.webm,.aac,.wma,.opus"
+                   @change="alHandleFile($event)">
+          </div>
+
+          <!-- Presets -->
+          <div class="flex gap-2">
+            <button @click="alSetPreset('lecture')"
+                    :class="alPreset==='lecture' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'"
+                    class="flex-1 px-3 py-2 rounded-lg text-sm transition-colors">
+              🎓 <span x-text="t('audiolab_preset_lecture')"></span>
+            </button>
+            <button @click="alSetPreset('clean')"
+                    :class="alPreset==='clean' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'"
+                    class="flex-1 px-3 py-2 rounded-lg text-sm transition-colors">
+              🎙️ <span x-text="t('audiolab_preset_clean')"></span>
+            </button>
+            <button @click="alSetPreset('custom')"
+                    :class="alPreset==='custom' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'"
+                    class="flex-1 px-3 py-2 rounded-lg text-sm transition-colors">
+              🔧 <span x-text="t('audiolab_preset_custom')"></span>
+            </button>
+          </div>
+
+          <!-- Toggles -->
+          <div class="space-y-3 bg-gray-900 border border-gray-800 rounded-lg p-4">
+            <!-- Loudnorm -->
+            <div class="flex items-center justify-between">
+              <label class="text-sm text-gray-300 flex items-center gap-2">
+                <input type="checkbox" x-model="alLoudnorm" :disabled="alPreset!=='custom'"
+                       class="w-4 h-4 rounded border-gray-600 bg-gray-800 text-indigo-500">
+                <span x-text="t('audiolab_loudnorm')"></span>
+              </label>
+              <div class="flex items-center gap-2" x-show="alLoudnorm">
+                <input type="range" min="-24" max="-10" step="1" x-model.number="alLoudnormTarget"
+                       :disabled="alPreset!=='custom'"
+                       class="w-24 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                <span class="text-xs text-gray-500 w-12 text-right" x-text="alLoudnormTarget + ' LUFS'"></span>
+              </div>
+            </div>
+            <!-- Voice Isolation -->
+            <label class="flex items-center gap-2 text-sm text-gray-300">
+              <input type="checkbox" x-model="alVoiceIsolation" :disabled="alPreset!=='custom'"
+                     class="w-4 h-4 rounded border-gray-600 bg-gray-800 text-indigo-500">
+              <span x-text="t('audiolab_voice_isolation')"></span>
+            </label>
+            <!-- Denoise -->
+            <label class="flex items-center gap-2 text-sm text-gray-300">
+              <input type="checkbox" x-model="alDenoise" :disabled="alPreset!=='custom'"
+                     class="w-4 h-4 rounded border-gray-600 bg-gray-800 text-indigo-500">
+              <span x-text="t('audiolab_denoise')"></span>
+            </label>
+          </div>
+
+          <!-- Process / Cancel + Progress -->
+          <div class="flex items-center gap-3">
+            <button @click="alProcess()" :disabled="!alCanProcess() || alStatus==='processing'"
+                    x-show="alStatus !== 'processing'"
+                    class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm rounded-lg font-medium transition-colors">
+              ▶ <span x-text="t('audiolab_process')"></span>
+            </button>
+            <button @click="alCancel()" x-show="alStatus==='processing'"
+                    class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-sm rounded-lg font-medium transition-colors">
+              ✕ <span x-text="t('audiolab_cancel')"></span>
+            </button>
+            <div x-show="alStatus==='processing'" class="flex-1">
+              <div class="bg-gray-800 rounded-full h-2 mb-1">
+                <div class="bg-indigo-500 h-2 rounded-full transition-all duration-300"
+                     :style="`width: ${Math.round(alProgress * 100)}%`"></div>
+              </div>
+              <p class="text-xs text-gray-500" x-text="alMessage"></p>
+            </div>
+          </div>
+
+          <!-- A/B Player (shown when done) -->
+          <template x-if="alStatus==='done'">
+            <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 space-y-3">
+              <!-- Hidden audio elements -->
+              <audio x-ref="alAudioA" :src="alOriginalUrl" preload="metadata"
+                     @timeupdate="alCurrentTime = $refs.alAudioA.currentTime"
+                     @loadedmetadata="alDuration = $refs.alAudioA.duration"
+                     @ended="alPlaying = false"></audio>
+              <audio x-ref="alAudioB" :src="alProcessedUrl" preload="metadata" muted></audio>
+
+              <!-- Play + seekbar -->
+              <div class="flex items-center gap-3">
+                <button @click="alPlay()" class="text-white text-lg w-8 h-8 flex items-center justify-center">
+                  <span x-text="alPlaying ? '⏸' : '▶'"></span>
+                </button>
+                <div class="flex-1 bg-gray-800 rounded-full h-2 cursor-pointer" @click="alSeek($event)">
+                  <div class="bg-indigo-500 h-2 rounded-full transition-all"
+                       :style="`width: ${alDuration ? (alCurrentTime / alDuration * 100) : 0}%`"></div>
+                </div>
+                <span class="text-xs text-gray-500 w-24 text-right"
+                      x-text="`${_formatLiveTime(Math.floor(alCurrentTime))} / ${_formatLiveTime(Math.floor(alDuration))}`"></span>
+              </div>
+
+              <!-- A/B toggle -->
+              <div class="flex items-center gap-2">
+                <button @click="alPlayerSource='A'; _alSyncPlayer()"
+                        :class="alPlayerSource==='A' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400'"
+                        class="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+                        x-text="t('audiolab_player_original')"></button>
+                <button @click="alPlayerSource='B'; _alSyncPlayer()"
+                        :class="alPlayerSource==='B' ? 'bg-green-600 text-white' : 'bg-gray-800 text-gray-400'"
+                        class="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+                        x-text="t('audiolab_player_processed')"></button>
+                <div class="flex-1"></div>
+                <!-- Volume -->
+                <span class="text-xs text-gray-500">🔊</span>
+                <input type="range" min="0" max="1" step="0.05" :value="alVolume"
+                       @input="alSetVolume(parseFloat($event.target.value))"
+                       class="w-20 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+              </div>
+
+              <!-- Stats -->
+              <div x-show="alStats" class="flex gap-4 text-xs text-gray-500 border-t border-gray-800 pt-2">
+                <span x-text="`${alStats?.original_lufs?.toFixed(1)} → ${alStats?.processed_lufs?.toFixed(1)} ${t('audiolab_stats_lufs')}`"></span>
+                <span x-text="`${_formatLiveTime(Math.floor(alStats?.duration_sec || 0))} ${t('audiolab_stats_duration').toLowerCase()}`"></span>
+                <span x-text="`${formatBytes(alStats?.processed_size || 0)}`"></span>
+              </div>
+
+              <!-- Download + Transcribe -->
+              <div class="flex gap-3 border-t border-gray-800 pt-3">
+                <a :href="`/api/audiolab/download/${alJobId}`"
+                   class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors">
+                  📥 <span x-text="t('audiolab_download')"></span>
+                </a>
+                <button @click="alSendToTranscribe()"
+                        class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm rounded-lg font-medium transition-colors">
+                  → <span x-text="t('audiolab_send_transcribe')"></span>
+                </button>
+              </div>
+            </div>
+          </template>
+
+          <!-- Error state -->
+          <div x-show="alStatus==='error'" class="bg-red-900/30 border border-red-800 rounded-lg p-3 text-sm text-red-300" x-text="alMessage"></div>
 
         </div>
       </div>
