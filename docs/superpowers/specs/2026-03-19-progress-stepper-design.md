@@ -1,7 +1,7 @@
 # Audio Lab Progress Stepper with ETA
 
 **Date:** 2026-03-19
-**Status:** Draft
+**Status:** Approved
 
 ## Problem
 
@@ -20,9 +20,12 @@ Replace the simple progress bar with a **vertical stepper** showing all pipeline
 ## Design Decisions
 
 - **Vertical stepper** layout chosen over segmented bar or minimal bar (more informative)
-- **Skipped steps shown** as struck-through/grayed with "skipped" label (pipeline always fully visible)
+- **Skipped steps shown** as struck-through/grayed (pipeline always fully visible)
 - **Dynamic ETA** based on real elapsed times per completed step, weighted proportionally
 - **Sub-progress** for Demucs chunks (chunk X/Y)
+- **Canonical step ID `"denoise"`** used regardless of engine (ffmpeg or deepfilter) — `run_pipeline()` will be updated to use `"denoise"` consistently
+- **`analyze` step is always active** — it cannot be skipped (LUFS measurement is always needed)
+- **ETA also interpolated during Demucs** using sub-progress, not just at step boundaries
 
 ## WebSocket Protocol Changes
 
@@ -35,13 +38,13 @@ Sent once at the start of processing, before any `audiolab_progress` messages.
   "type": "audiolab_steps",
   "job_id": "abc123",
   "steps": [
-    {"id": "decode",   "label_key": "audiolab_step_decode",   "active": true},
-    {"id": "analyze",  "label_key": "audiolab_step_analyze",  "active": true},
-    {"id": "denoise",  "label_key": "audiolab_step_denoise",  "active": true},
-    {"id": "demucs",   "label_key": "audiolab_step_demucs",   "active": false},
-    {"id": "polish",   "label_key": "audiolab_step_polish",   "active": false},
-    {"id": "loudnorm", "label_key": "audiolab_step_loudnorm", "active": true},
-    {"id": "resample", "label_key": "audiolab_step_resample", "active": true}
+    {"id": "decode",   "label_key": "audiolab_stepper_decode",   "active": true},
+    {"id": "analyze",  "label_key": "audiolab_stepper_analyze",  "active": true},
+    {"id": "denoise",  "label_key": "audiolab_stepper_denoise",  "active": true},
+    {"id": "demucs",   "label_key": "audiolab_stepper_demucs",   "active": false},
+    {"id": "polish",   "label_key": "audiolab_stepper_polish",   "active": false},
+    {"id": "loudnorm", "label_key": "audiolab_stepper_loudnorm", "active": true},
+    {"id": "resample", "label_key": "audiolab_stepper_resample", "active": true}
   ]
 }
 ```
@@ -101,14 +104,14 @@ Each step has a relative weight representing its expected share of total process
 | Step | Weight (ffmpeg denoise) | Weight (deepfilter denoise) |
 |------|------------------------|-----------------------------|
 | decode | 0.05 | 0.05 |
-| analyze | 0.02 | 0.02 |
-| denoise | 0.08 | 0.15 |
-| demucs | 0.50 | 0.45 |
+| analyze | 0.03 | 0.03 |
+| denoise | 0.10 | 0.18 |
+| demucs | 0.52 | 0.47 |
 | polish | 0.05 | 0.05 |
-| loudnorm | 0.10 | 0.10 |
-| resample | 0.05 | 0.05 |
+| loudnorm | 0.15 | 0.12 |
+| resample | 0.10 | 0.10 |
 
-Weights of skipped steps are excluded and the remaining weights are re-normalized to sum to 1.0.
+Raw weights sum to 1.0 for each column. Weights of skipped steps are excluded and the remaining weights are re-normalized to sum to 1.0.
 
 ### Algorithm
 
@@ -129,7 +132,18 @@ else:
     eta_sec = audio_duration_sec * 4               # rough initial estimate
 ```
 
-The ETA is recalculated after each step completes, providing increasingly accurate estimates as more timing data is available.
+The ETA is recalculated after each step completes, and also **during Demucs** using sub-progress interpolation:
+
+```
+# During Demucs step with sub_progress = chunk_done / chunk_total:
+demucs_weight = normalized["demucs"]
+partial_demucs_weight = demucs_weight * sub_progress
+current_completed_weight = completed_weight + partial_demucs_weight
+pace = elapsed_sec / current_completed_weight
+eta_sec = (1.0 - current_completed_weight) * pace
+```
+
+ETA display: show `null` (hidden) until at least one step has completed. Before that, no ETA is shown.
 
 ### Sub-progress for Demucs
 
@@ -170,6 +184,14 @@ The overall `progress` fraction interpolates within the Demucs weight range base
    - Accept optional `sub_progress_callback(fraction, label)` parameter.
    - Call it after each chunk completes.
 
+5. **Modify `apply_voice_isolation()`**
+   - Accept and forward `sub_progress_callback` to `_run_demucs()`.
+
+6. **Fix `run_pipeline()` step ID consistency**
+   - Change denoise step to always use `"denoise"` as the step ID (not `"ffmpeg_denoise"` / `"deepfilter"`).
+   - Add `steps_completed.append("analyze")` after LUFS analysis (currently missing).
+   - Append `"decode"` to `steps_completed` is already done.
+
 ### `app/main.py`
 
 1. **In `_run_audiolab()`**:
@@ -206,8 +228,11 @@ New WebSocket handlers:
 - `audiolab_steps`: Initialize `alSteps` array, set inactive steps to `"skipped"`.
 - `audiolab_progress` (enhanced): Update current step status, store sub-progress, elapsed, ETA. When `completed_step` is present, mark that step as `"completed"` with its elapsed time.
 
-Helper function:
+New Alpine method (inside `app()` return object, NOT a standalone function):
 - `_formatEta(seconds)`: Formats ETA as "~Xm Ys" or "< 1m" for short durations.
+
+State reset in `alProcess()`:
+- Reset `alSteps`, `alElapsed`, `alEta`, `alSubProgress`, `alSubLabel` when starting a new job (alongside existing `alProgress` and `alMessage` resets).
 
 ### `app/templates/index.html`
 
@@ -241,7 +266,7 @@ Replace the current progress section (lines 634-640) with the stepper:
     </div>
     <div class="flex justify-between text-xs text-gray-500">
       <span x-text="`${Math.round(alProgress * 100)}%`"></span>
-      <span x-show="alEta !== null" x-text="`⏱ ETA ${_formatEta(alEta)}`"></span>
+      <span x-show="alEta !== null" x-text="'⏱ ETA ' + _formatEta(alEta)"></span>
     </div>
   </div>
 </div>
@@ -251,18 +276,21 @@ Replace the current progress section (lines 634-640) with the stepper:
 
 ### New keys needed
 
+Stepper labels use short noun phrases (not action phrases with "..."). Some keys already exist with action-phrase text used for progress messages — we add new **stepper-specific** keys:
+
 | Key | EN | IT |
 |-----|----|----|
-| `audiolab_step_decode` | Decode audio | Decodifica audio |
-| `audiolab_step_analyze` | Analyze loudness | Analisi loudness |
-| `audiolab_step_denoise` | Remove noise | Rimozione rumore |
-| `audiolab_step_demucs` | Voice isolation (Demucs) | Isolamento voce (Demucs) |
-| `audiolab_step_polish` | Audio polish | Rifinitura audio |
-| `audiolab_step_loudnorm` | Normalize loudness | Normalizzazione loudness |
-| `audiolab_step_resample` | Prepare output | Preparazione output |
-| `audiolab_step_skipped` | skipped | saltato |
+| `audiolab_stepper_decode` | Decode audio | Decodifica audio |
+| `audiolab_stepper_analyze` | Analyze loudness | Analisi loudness |
+| `audiolab_stepper_denoise` | Remove noise | Rimozione rumore |
+| `audiolab_stepper_demucs` | Voice isolation | Isolamento voce |
+| `audiolab_stepper_polish` | Audio polish | Rifinitura audio |
+| `audiolab_stepper_loudnorm` | Normalize loudness | Normalizzazione loudness |
+| `audiolab_stepper_resample` | Prepare output | Preparazione output |
 
-Note: `audiolab_step_polish` already exists from the HQ pipeline implementation.
+The existing `audiolab_step_*` keys (with "..." suffixes) remain unchanged — they are used for the progress message text.
+
+The `label_key` in `audiolab_steps` messages references the new `audiolab_stepper_*` keys.
 
 ## Testing
 
@@ -271,6 +299,10 @@ Note: `audiolab_step_polish` already exists from the HQ pipeline implementation.
 3. **Integration test**: Verify `audiolab_steps` message is sent before first `audiolab_progress`.
 4. **Integration test**: Verify `completed_step` and `completed_step_elapsed` fields are present in progress messages.
 5. **Frontend**: Manual smoke test — verify stepper renders, updates, shows ETA.
+
+## Final State
+
+When the pipeline completes (`audiolab_done` message), the frontend marks all active steps as `"completed"`. This ensures the stepper shows all green checkmarks at completion, even if the last `completed_step` message was missed.
 
 ## What Does NOT Change
 
