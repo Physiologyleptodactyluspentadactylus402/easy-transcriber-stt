@@ -365,7 +365,7 @@ class TestRunPipeline:
 
     def test_progress_callback(self, audio_tone_10s, tmp_path):
         calls = []
-        def cb(frac, step, msg):
+        def cb(frac, step, msg, **kwargs):
             calls.append((frac, step, msg))
         config = PreprocessConfig(loudnorm=True, voice_isolation=False, denoise=False)
         run_pipeline(audio_tone_10s, tmp_path / "work", config, progress_callback=cb)
@@ -399,7 +399,7 @@ class TestRunPipeline:
         )
         result = run_pipeline(audio_tone_10s, tmp_path / "work", config)
         assert result.processed_path.exists()
-        assert "ffmpeg_denoise" in result.steps_completed
+        assert "denoise" in result.steps_completed
         assert "polish" in result.steps_completed
         assert "loudnorm" in result.steps_completed
 
@@ -414,26 +414,34 @@ class TestRunPipeline:
     def test_pipeline_order_denoise_before_loudnorm(self, audio_tone_10s, tmp_path):
         """Verify denoise runs before loudnorm in the new pipeline order."""
         calls = []
-        def cb(frac, step, msg):
+        def cb(frac, step, msg, **kwargs):
             calls.append(step)
         config = PreprocessConfig(
             loudnorm=True, voice_isolation=False, denoise=True, polish=False,
         )
         run_pipeline(audio_tone_10s, tmp_path / "work", config, progress_callback=cb)
-        step_names = [s for s in calls if s in ("ffmpeg_denoise", "loudnorm")]
-        assert step_names == ["ffmpeg_denoise", "loudnorm"]
+        # Deduplicate consecutive repeats, keep order of first appearance
+        seen = []
+        for s in calls:
+            if s in ("denoise", "loudnorm") and (not seen or seen[-1] != s):
+                seen.append(s)
+        assert seen == ["denoise", "loudnorm"]
 
     def test_pipeline_order_polish_before_loudnorm(self, audio_tone_10s, tmp_path):
         """Verify polish runs before loudnorm."""
         calls = []
-        def cb(frac, step, msg):
+        def cb(frac, step, msg, **kwargs):
             calls.append(step)
         config = PreprocessConfig(
             loudnorm=True, voice_isolation=False, denoise=False, polish=True,
         )
         run_pipeline(audio_tone_10s, tmp_path / "work", config, progress_callback=cb)
-        step_names = [s for s in calls if s in ("polish", "loudnorm")]
-        assert step_names == ["polish", "loudnorm"]
+        # Deduplicate consecutive repeats, keep order of first appearance
+        seen = []
+        for s in calls:
+            if s in ("polish", "loudnorm") and (not seen or seen[-1] != s):
+                seen.append(s)
+        assert seen == ["polish", "loudnorm"]
 
 
 class TestApplyPolish:
@@ -593,3 +601,59 @@ class TestPipelineProgressTracker:
                 tracker.complete_step(s["id"])
         data = tracker.get_progress_data()
         assert abs(data["progress"] - 1.0) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Task 3d — enriched progress messages
+# ---------------------------------------------------------------------------
+
+
+class TestPipelineProgressMessages:
+    def test_progress_callback_receives_extra_kwargs(self, audio_tone_10s, tmp_path):
+        """Callback receives elapsed_sec in the final 'done' call."""
+        kwargs_list = []
+
+        def cb(frac, step, msg, **kwargs):
+            kwargs_list.append((step, kwargs))
+
+        config = PreprocessConfig(loudnorm=True, voice_isolation=False, denoise=False)
+        run_pipeline(audio_tone_10s, tmp_path / "work", config, progress_callback=cb)
+        # The last call is step="done"
+        done_calls = [kw for s, kw in kwargs_list if s == "done"]
+        assert len(done_calls) >= 1
+        assert "elapsed_sec" in done_calls[-1]
+        assert done_calls[-1]["elapsed_sec"] >= 0
+
+    def test_denoise_step_uses_canonical_id(self, audio_tone_10s, tmp_path):
+        """Denoise step should use 'denoise' not 'ffmpeg_denoise' in callbacks."""
+        steps_seen = []
+
+        def cb(frac, step, msg, **kwargs):
+            steps_seen.append(step)
+
+        config = PreprocessConfig(
+            loudnorm=False, voice_isolation=False, denoise=True, polish=False,
+        )
+        run_pipeline(audio_tone_10s, tmp_path / "work", config, progress_callback=cb)
+        assert "denoise" in steps_seen
+        assert "ffmpeg_denoise" not in steps_seen
+
+    def test_analyze_in_steps_completed(self, audio_tone_10s, tmp_path):
+        """The 'analyze' step should appear in result.steps_completed."""
+        config = PreprocessConfig(loudnorm=False, voice_isolation=False, denoise=False)
+        result = run_pipeline(audio_tone_10s, tmp_path / "work", config)
+        assert "analyze" in result.steps_completed
+
+    def test_completed_step_field_present(self, audio_tone_10s, tmp_path):
+        """At least one callback call has completed_step set with completed_step_elapsed."""
+        calls_with_completed = []
+
+        def cb(frac, step, msg, **kwargs):
+            if kwargs.get("completed_step") is not None:
+                calls_with_completed.append(kwargs)
+
+        config = PreprocessConfig(loudnorm=True, voice_isolation=False, denoise=False)
+        run_pipeline(audio_tone_10s, tmp_path / "work", config, progress_callback=cb)
+        assert len(calls_with_completed) >= 1
+        assert calls_with_completed[0]["completed_step_elapsed"] is not None
+        assert calls_with_completed[0]["completed_step_elapsed"] >= 0

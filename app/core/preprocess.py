@@ -473,7 +473,7 @@ def _process_demucs_chunk(model, chunk_wav, device) -> np.ndarray:
     return sources[0, vocals_idx].mean(0).cpu().float().numpy()
 
 
-def _run_demucs(wav_path: Path) -> np.ndarray:
+def _run_demucs(wav_path: Path, sub_progress_callback=None) -> np.ndarray:
     """Run Demucs htdemucs with chunked processing to avoid GPU OOM.
 
     Splits audio into 5-minute chunks with 5-second overlap, processes each
@@ -530,6 +530,9 @@ def _run_demucs(wav_path: Path) -> np.ndarray:
                 vocals[start + ol_len:end] = chunk_vocals[rest_start:rest_start + rest_len]
 
         chunk_idx += 1
+        if sub_progress_callback:
+            total_chunks = (total_samples + step_samples - 1) // step_samples
+            sub_progress_callback(chunk_idx / total_chunks, f"chunk {chunk_idx}/{total_chunks}")
         logger.debug("Demucs chunk %d done: samples %d-%d", chunk_idx, start, end)
 
         if end >= total_samples:
@@ -541,6 +544,7 @@ def _run_demucs(wav_path: Path) -> np.ndarray:
 def apply_voice_isolation(
     wav_path: Path,
     output_path: Path,
+    sub_progress_callback=None,
 ) -> Path:
     """Extract vocals using Demucs htdemucs, resample to 48kHz, save as WAV."""
     if not _DEMUCS_AVAILABLE:
@@ -548,7 +552,7 @@ def apply_voice_isolation(
             "Demucs is not installed. Install it with: pip install demucs"
         )
 
-    vocals_np = _run_demucs(wav_path)
+    vocals_np = _run_demucs(wav_path, sub_progress_callback=sub_progress_callback)
 
     # Demucs outputs at 44100Hz — resample to 48000Hz
     vocals_tensor = torch.from_numpy(vocals_np).unsqueeze(0)  # (1, samples)
@@ -916,22 +920,43 @@ def run_pipeline(
     def _cancelled() -> bool:
         return bool(cancel_flag and cancel_flag.get("cancelled"))
 
-    def _progress(frac: float, step: str, msg: str):
+    # Build tracker
+    step_list = build_step_list(config)
+    tracker = PipelineProgressTracker(step_list, denoise_engine=config.denoise_engine)
+    tracker.start()
+
+    def _progress(step: str, msg: str):
+        data = tracker.get_progress_data()
         if progress_callback:
-            progress_callback(frac, step, msg)
+            progress_callback(
+                data["progress"], step, msg,
+                sub_progress=data["sub_progress"],
+                sub_label=data["sub_label"],
+                elapsed_sec=data["elapsed_sec"],
+                eta_sec=data["eta_sec"],
+                completed_step=data["completed_step"],
+                completed_step_elapsed=data["completed_step_elapsed"],
+            )
 
     steps_completed: list[str] = []
 
-    # Step 0: Decode to 48kHz WAV
-    _progress(0.0, "decode", "Decoding audio...")
+    # Step: Decode to 48kHz WAV
+    tracker.begin_step("decode")
+    _progress("decode", "Decoding audio...")
     original_wav = work_dir / "original.wav"
     decode_to_wav(input_path, original_wav, sample_rate=48000)
     steps_completed.append("decode")
+    tracker.complete_step("decode")
+    _progress("decode", "Decode complete")
 
-    # LUFS analysis (always, even if loudnorm is off)
-    _progress(0.1, "analyze", "Measuring loudness...")
+    # Step: LUFS analysis (always, even if loudnorm is off)
+    tracker.begin_step("analyze")
+    _progress("analyze", "Measuring loudness...")
     lufs_stats = analyze_lufs(original_wav)
     original_lufs = lufs_stats["input_i"]
+    steps_completed.append("analyze")
+    tracker.complete_step("analyze")
+    _progress("analyze", "Analysis complete")
 
     if _cancelled():
         return _early_return(original_wav, original_wav, original_lufs, steps_completed, work_dir)
@@ -939,42 +964,56 @@ def run_pipeline(
     # Track the current working file (48kHz)
     current = original_wav
 
-    # Step 1: Denoise (before voice isolation — preserves original harmonics)
+    # Step: Denoise (before voice isolation — preserves original harmonics)
     if config.denoise:
         if _cancelled():
             return _early_return(original_wav, current, original_lufs, steps_completed, work_dir)
-        engine_label = "deepfilter" if config.denoise_engine == "deepfilter" else "ffmpeg_denoise"
-        _progress(0.15, engine_label, "Removing noise...")
+        tracker.begin_step("denoise")
+        _progress("denoise", "Removing noise...")
         denoised = work_dir / "step1_denoised.wav"
         apply_denoise(current, denoised, engine=config.denoise_engine)
         current = denoised
-        steps_completed.append(engine_label)
+        steps_completed.append("denoise")
+        tracker.complete_step("denoise")
+        _progress("denoise", "Denoise complete")
 
-    # Step 2: Voice isolation (chunked Demucs)
+    # Step: Voice isolation (chunked Demucs)
     if config.voice_isolation:
         if _cancelled():
             return _early_return(original_wav, current, original_lufs, steps_completed, work_dir)
-        _progress(0.3, "demucs", "Isolating voice (this may take a while)...")
+        tracker.begin_step("demucs")
+        _progress("demucs", "Isolating voice (this may take a while)...")
         vocals = work_dir / "step2_vocals.wav"
-        apply_voice_isolation(current, vocals)
+
+        def _demucs_sub(frac, label):
+            tracker.update_sub_progress(frac, label)
+            _progress("demucs", f"Isolating voice — {label}")
+
+        apply_voice_isolation(current, vocals, sub_progress_callback=_demucs_sub)
         current = vocals
         steps_completed.append("demucs")
+        tracker.complete_step("demucs")
+        _progress("demucs", "Voice isolation complete")
 
-    # Step 3: Polish (high-pass, de-esser, EQ, compressor, limiter)
+    # Step: Polish (high-pass, de-esser, EQ, compressor, limiter)
     if config.polish:
         if _cancelled():
             return _early_return(original_wav, current, original_lufs, steps_completed, work_dir)
-        _progress(0.7, "polish", "Applying audio polish...")
+        tracker.begin_step("polish")
+        _progress("polish", "Applying audio polish...")
         polished = work_dir / "step3_polished.wav"
         _apply_polish(current, polished)
         current = polished
         steps_completed.append("polish")
+        tracker.complete_step("polish")
+        _progress("polish", "Polish complete")
 
-    # Step 4: Loudnorm (at the end — normalizes the final result)
+    # Step: Loudnorm (at the end — normalizes the final result)
     if config.loudnorm:
         if _cancelled():
             return _early_return(original_wav, current, original_lufs, steps_completed, work_dir)
-        _progress(0.8, "loudnorm", f"Normalizing to {config.loudnorm_target} LUFS...")
+        tracker.begin_step("loudnorm")
+        _progress("loudnorm", f"Normalizing to {config.loudnorm_target} LUFS...")
         normalized = work_dir / "step4_loudnorm.wav"
         # Re-analyze current file since it's been modified by previous steps.
         # Pass measured= to skip the redundant pass-1 inside apply_loudnorm.
@@ -982,9 +1021,12 @@ def run_pipeline(
         apply_loudnorm(current, normalized, target_lufs=config.loudnorm_target, measured=current_lufs)
         current = normalized
         steps_completed.append("loudnorm")
+        tracker.complete_step("loudnorm")
+        _progress("loudnorm", "Loudnorm complete")
 
     # Final: save 48kHz copy for player + 16kHz for transcription
-    _progress(0.9, "resample", "Preparing final output...")
+    tracker.begin_step("resample")
+    _progress("resample", "Preparing final output...")
     processed_48k = work_dir / "processed_48k.wav"
     processed_16k = work_dir / "processed.wav"
 
@@ -994,6 +1036,8 @@ def run_pipeline(
 
     _resample_to_16k(current, processed_16k)
     steps_completed.append("resample")
+    tracker.complete_step("resample")
+    _progress("resample", "Resample complete")
 
     # Measure processed LUFS
     processed_lufs_stats = analyze_lufs(processed_48k)
@@ -1011,7 +1055,7 @@ def run_pipeline(
         "processed_size": processed_size,
     }
 
-    _progress(1.0, "done", "Processing complete")
+    _progress("done", "Processing complete")
     logger.info("Pipeline complete: steps=%s, stats=%s", steps_completed, stats)
     return PipelineResult(
         original_path=original_wav,
