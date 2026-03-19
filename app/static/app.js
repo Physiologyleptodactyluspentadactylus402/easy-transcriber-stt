@@ -64,6 +64,8 @@ function app() {
     alLoudnormTarget: -16,
     alVoiceIsolation: true,
     alDenoise: true,
+    alDenoiseEngine: "ffmpeg",
+    alShowGuide: false,
     alStats: null,
     alPlayerSource: 'A',
     alPlaying: false,
@@ -133,6 +135,7 @@ function app() {
         const sm = sp.models.find(m => m.id === this.settings.default_model);
         if (sm) this.selectedModel = sm;
       }
+      if (this.settings.denoise_engine) this.alDenoiseEngine = this.settings.denoise_engine;
     },
 
     async loadHistory() {
@@ -435,6 +438,20 @@ function app() {
       this.installError = null;
     },
 
+    alSelectDenoiseEngine(engine) {
+      if (engine === 'deepfilter' && !this.alDeps.deepfilter) {
+        this.alShowGuide = true;
+        return;
+      }
+      this.alDenoiseEngine = engine;
+      this.saveSettings({ denoise_engine: engine });
+    },
+
+    alInstallFromGuide() {
+      this.alShowGuide = false;
+      this.alOpenInstallModal('deepfilter');
+    },
+
     _updateLiveProviders() {
       this.liveProviders = this.providers.filter(p =>
         p.available && p.models.some(m => m.supports_live)
@@ -599,11 +616,8 @@ function app() {
     },
 
     alMissingDep() {
-      // Returns the name of the first missing dep required by current settings, or null
-      const needsDemucs = this.alVoiceIsolation && !this.alDeps.demucs;
-      const needsDeepfilter = this.alDenoise && !this.alDeps.deepfilter;
-      if (needsDemucs) return 'demucs';
-      if (needsDeepfilter) return 'deepfilter';
+      if (this.alVoiceIsolation && !this.alDeps.demucs) return 'demucs';
+      if (this.alDenoise && this.alDenoiseEngine === 'deepfilter' && !this.alDeps.deepfilter) return 'deepfilter';
       return null;
     },
 
@@ -624,6 +638,7 @@ function app() {
         formData.append('voice_isolation', this.alVoiceIsolation);
         formData.append('denoise', this.alDenoise);
       }
+      formData.append("denoise_engine", this.alDenoiseEngine);
       this.alStatus = 'processing';
       this.alProgress = 0;
       this.alMessage = '';

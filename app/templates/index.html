@@ -578,18 +578,31 @@
               </button>
               <span x-show="alDeps.demucs" class="text-xs text-green-500/60">✓</span>
             </div>
-            <!-- Denoise -->
+            <!-- Denoise toggle -->
             <div class="flex items-center justify-between">
               <label class="flex items-center gap-2 text-sm text-gray-300">
                 <input type="checkbox" x-model="alDenoise" :disabled="alPreset!=='custom'"
                        class="w-4 h-4 rounded border-gray-600 bg-gray-800 text-indigo-500">
                 <span x-text="t('audiolab_denoise')"></span>
               </label>
-              <button x-show="!alDeps.deepfilter" @click="alOpenInstallModal('deepfilter')"
-                      class="text-xs px-2 py-0.5 rounded bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 transition-colors cursor-pointer">
-                Install
+            </div>
+            <!-- Engine selector (visible when denoise enabled) -->
+            <div x-show="alDenoise" class="ml-6 mt-1 flex items-center gap-2 flex-wrap">
+              <button @click="alSelectDenoiseEngine('ffmpeg')"
+                      :class="alDenoiseEngine==='ffmpeg' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'"
+                      class="text-xs px-3 py-1 rounded-full transition-colors cursor-pointer">
+                <span x-text="t('audiolab_denoise_engine_ffmpeg')"></span>
               </button>
-              <span x-show="alDeps.deepfilter" class="text-xs text-green-500/60">✓</span>
+              <button @click="alSelectDenoiseEngine('deepfilter')"
+                      :class="alDenoiseEngine==='deepfilter' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'"
+                      class="text-xs px-3 py-1 rounded-full transition-colors cursor-pointer">
+                <span x-text="t('audiolab_denoise_engine_deepfilter')"></span>
+                <span x-show="!alDeps.deepfilter" class="ml-1 opacity-60">&#128274;</span>
+              </button>
+              <a x-show="!alDeps.deepfilter" @click.prevent="alShowGuide=true"
+                 href="#" class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer">
+                <span x-text="t('audiolab_denoise_howto')"></span> &#8599;
+              </a>
             </div>
           </div>
 
@@ -680,6 +693,40 @@
 
         </div>
       </div>
+
+    <!-- DeepFilterNet install guide modal -->
+    <div x-show="alShowGuide" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+         @click.self="alShowGuide=false" @keydown.escape.window="alShowGuide=false">
+      <div class="bg-gray-800 rounded-xl shadow-2xl border border-gray-700 w-full max-w-md mx-4 p-6">
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-lg font-semibold text-white" x-text="t('audiolab_deepfilter_guide_title')"></h3>
+          <button @click="alShowGuide=false" class="text-gray-400 hover:text-white text-xl cursor-pointer">&times;</button>
+        </div>
+        <p class="text-sm text-gray-400 mb-4" x-text="t('audiolab_deepfilter_guide_intro')"></p>
+        <ol class="space-y-3 text-sm">
+          <li>
+            <div class="text-white font-medium" x-text="t('audiolab_deepfilter_guide_step1_title')"></div>
+            <div class="text-gray-400 mt-0.5" x-text="t('audiolab_deepfilter_guide_step1_body')"></div>
+          </li>
+          <li>
+            <div class="text-white font-medium" x-text="t('audiolab_deepfilter_guide_step2_title')"></div>
+            <div class="text-gray-400 mt-0.5" x-text="t('audiolab_deepfilter_guide_step2_body')"></div>
+          </li>
+          <li>
+            <div class="text-white font-medium" x-text="t('audiolab_deepfilter_guide_step3_title')"></div>
+            <div class="text-gray-400 mt-0.5" x-text="t('audiolab_deepfilter_guide_step3_body')"></div>
+          </li>
+          <li>
+            <div class="text-white font-medium" x-text="t('audiolab_deepfilter_guide_step4_title')"></div>
+            <button @click="alInstallFromGuide()"
+                    class="mt-2 w-full py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors cursor-pointer"
+                    x-text="t('audiolab_deepfilter_guide_install_btn')"></button>
+          </li>
+        </ol>
+        <p class="mt-4 text-xs text-amber-400/80">&#9888; <span x-text="t('audiolab_deepfilter_guide_warning')"></span></p>
+      </div>
+    </div>
 
     </div><!-- end main panel -->
   </div><!-- end layout -->
