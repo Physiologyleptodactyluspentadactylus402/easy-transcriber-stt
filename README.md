@@ -1,70 +1,137 @@
-# GPT-TranscriberUI
+# easy-transcriber-stt
 
-Interfaccia grafica (CustomTkinter) per dividere file audio in chunk e trascriverli con l'API di OpenAI.
+[![Version](https://img.shields.io/badge/version-v0.9.0-blue)](https://github.com/agiuseppe28/easy-transcriber-stt/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)]()
 
-## Requisiti
+> Local-first audio transcription tool. Upload audio or video, get a transcript in seconds. No cloud required if you use local providers.
 
-- **Python 3.10+**
-- **ffmpeg** installato nel sistema (necessario per caricare/esportare audio con pydub)
-  - macOS: `brew install ffmpeg`
-  - Ubuntu/Debian: `sudo apt-get update && sudo apt-get install -y ffmpeg`
-  - Windows: `choco install ffmpeg` (oppure scarica binari e aggiungi alla variabile PATH)
+---
 
-## Installazione rapida
+## Features
 
-1. Clona la repo e posizionati nella cartella.
-2. (Opzionale) Crea e attiva un virtual environment.
-3. **Esegui lo starter**:
-   ```bash
-   python3 start.py
-   ```
-   Lo script:
-   - aggiorna `pip`,
-   - installa i pacchetti mancanti da `requirements.txt`,
-   - verifica la presenza di `ffmpeg`,
-   - lancia la GUI (`main_ui.py`).
+- **Multi-provider transcription** — OpenAI (whisper-1, gpt-4o-transcribe, gpt-4o-mini-transcribe), ElevenLabs (scribe_v2)
+- **Local providers** *(optional)* — faster-whisper, Qwen3-ASR, Ollama — no API key required
+- **Audio Lab** — advanced preprocessing: noise reduction, vocal isolation (Demucs), HQ pipeline
+- **Dual denoise engine** — DeepFilterNet (AI-based) or ffmpeg afftdn (fast, no GPU required)
+- **Real-time progress** — WebSocket-powered stepper with ETA
+- **Transcription history** — stored locally in SQLite
+- **Multiple output formats** — TXT, SRT, VTT, JSON
+- **Bilingual UI** — English and Italian
+- **No CDN, no Node.js** — all static assets vendored, works fully offline
+- **Double-click startup** — `start.bat` (Windows) or `start.sh` (macOS/Linux)
 
-In alternativa, installa manualmente:
+---
+
+## Requirements
+
+- Python 3.10+
+- [ffmpeg](https://ffmpeg.org/download.html) installed and on PATH
+- At least one provider API key **or** a local provider installed (see [docs/providers.md](docs/providers.md))
+
+---
+
+## Quick Start
+
 ```bash
-pip install -r requirements.txt
-python3 main_ui.py
+git clone https://github.com/agiuseppe28/easy-transcriber-stt.git
+cd easy-transcriber-stt
+python start.py
 ```
 
-## Configurazione chiave API
+Or double-click `start.bat` (Windows) / `start.sh` (macOS/Linux).
 
-Crea un file `.env` nella root del progetto con:
+The app opens automatically in your browser. On first launch, a setup wizard will guide you through provider configuration.
+
+---
+
+## Providers
+
+| Provider | Models | Requires API Key | Notes |
+|----------|--------|-----------------|-------|
+| OpenAI | whisper-1, gpt-4o-transcribe, gpt-4o-mini-transcribe | Yes | Best accuracy |
+| ElevenLabs | scribe_v2, scribe_v1 | Yes | Speaker diarization |
+| faster-whisper | tiny → large-v3 | No | Local, GPU optional |
+| Qwen3-ASR | 0.6B, 1.7B | No | Local, lightweight |
+| Ollama | any speech model | No | Local, requires Ollama |
+
+Full setup instructions: [docs/providers.md](docs/providers.md)
+
+---
+
+## Configuration
+
+Copy `.env.example` to `.env` and add your API keys:
+
+```bash
+cp .env.example .env
+# Edit .env with your keys
 ```
-OPENAI_API_KEY=la_tua_chiave
+
+```env
+OPENAI_API_KEY=sk-...
+ELEVENLABS_API_KEY=sk_...
 ```
-La GUI può caricare la chiave da `.env` (bottone “Carica da .env”).  
-Il codice usa `python-dotenv` per caricare la variabile (vedi `main_ui.py`).
 
-## Utilizzo
+Settings (language, default provider, output formats) are managed through the UI and saved to `settings.json`.
 
-1. Avvia l'app con `python3 start.py` (o `python3 main_ui.py`).
-2. Seleziona un file audio (mp3/m4a/wav/ogg/flac/webm).
-3. Scegli il percorso di output del testo.
-4. (Facoltativo) Inserisci **Prompt** per indirizzare la trascrizione.
-5. (Facoltativo) Cambia il modello (es. `whisper-1` consigliato).
-6. Premi **“Avvia Trascrizione”**.
+---
 
-L'app dividerà l'audio in `audio_chunks/` e trascriverà i pezzi in sequenza.
+## Documentation
 
-## Note tecniche
+- [Installation guide](docs/installation.md) — detailed setup for all platforms
+- [Providers](docs/providers.md) — compare providers, get API keys, configure local models
+- [FAQ](docs/faq.md) — common questions
 
-- La UI è in `main_ui.py` e importa:
-  - `customtkinter` per l’interfaccia
-  - `python-dotenv` per caricare la chiave da `.env`
-  - funzioni locali `split_audio.py` e `transcribe2.py`
-- La suddivisione audio usa **pydub** (richiede `ffmpeg`).
-- La trascrizione usa l’SDK `openai`. Se il modello selezionato non è disponibile, viene suggerito di provare `whisper-1`.
+---
 
-## Troubleshooting
+## Contributing
 
-- **“ffmpeg non trovato”**: assicurati che `ffmpeg` sia installato e presente nel PATH.  
-- **Errore modello**: se compare un errore “model not found”, usa `whisper-1`.
-- **Linux**: potrebbe essere necessario installare `python3-tk` per tkinter/CustomTkinter.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Issues and PRs are welcome.
 
-## Licenza
+---
 
-TBD
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+---
+
+---
+
+## Italiano
+
+> Strumento di trascrizione audio locale. Carica audio o video, ottieni una trascrizione in pochi secondi. Non richiede cloud se usi i provider locali.
+
+### Caratteristiche
+
+- **Trascrizione multi-provider** — OpenAI (whisper-1, gpt-4o-transcribe, gpt-4o-mini-transcribe), ElevenLabs (scribe_v2)
+- **Provider locali** *(opzionali)* — faster-whisper, Qwen3-ASR, Ollama — senza chiave API
+- **Audio Lab** — preprocessing avanzato: riduzione rumore, isolamento voce (Demucs), pipeline HQ
+- **Progresso in tempo reale** — stepper WebSocket con ETA
+- **Storico trascrizioni** — salvato localmente in SQLite
+- **Formati di output** — TXT, SRT, VTT, JSON
+- **Interfaccia bilingue** — italiano e inglese
+- **Nessun CDN, nessun Node.js** — funziona completamente offline
+- **Avvio con doppio click** — `start.bat` (Windows) / `start.sh` (macOS/Linux)
+
+### Requisiti
+
+- Python 3.10+
+- [ffmpeg](https://ffmpeg.org/download.html) installato e nel PATH
+- Almeno una chiave API provider **oppure** un provider locale installato
+
+### Avvio rapido
+
+```bash
+git clone https://github.com/agiuseppe28/easy-transcriber-stt.git
+cd easy-transcriber-stt
+python start.py
+```
+
+Oppure doppio click su `start.bat` (Windows) / `start.sh` (macOS/Linux).
+
+L'app si apre automaticamente nel browser. Al primo avvio, un wizard guida la configurazione del provider.
+
+Per la documentazione completa vedi la [sezione inglese](#easy-transcriber-stt) sopra.
