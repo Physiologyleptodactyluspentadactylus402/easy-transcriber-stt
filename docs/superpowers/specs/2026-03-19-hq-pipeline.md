@@ -51,8 +51,8 @@ Five ffmpeg audio filters executed in a single ffmpeg pass:
 
 1. **High-pass 80Hz** — removes rumble, table bumps, HVAC vibrations
 2. **De-esser** — attenuates harsh sibilants (4-8kHz) using boost→compress→cut technique
-3. **EQ coloration** — low shelf +2dB@250Hz (body), peak +1.5dB@3kHz (presence), high shelf +1dB@10kHz (air)
-4. **Gentle compressor** — ratio 2:1, threshold -20dB, attack 20ms, release 200ms
+3. **EQ coloration** — lowshelf +2dB@250Hz (body), peak +1.5dB@3kHz (presence), highshelf +1dB@10kHz (air)
+4. **Gentle compressor** — ratio 2:1, threshold 0.1 linear (~-20dB), attack 20ms, release 200ms
 5. **Limiter** — brick wall at -1dBTP (linear 0.891)
 
 All five activate/deactivate together via a single `polish` boolean.
@@ -144,12 +144,12 @@ def _apply_polish(wav_path: Path, output_path: Path) -> Path:
         "highpass=f=80:poles=2",
         # De-esser: boost sibilant band → compress → cut back
         "equalizer=f=6000:width_type=s:width=2.0:g=3",
-        "acompressor=threshold=0.03:ratio=4:attack=5:release=50",
+        "acompressor=threshold=0.1:ratio=4:attack=5:release=50",
         "equalizer=f=6000:width_type=s:width=2.0:g=-3",
-        # EQ: body + presence + air
-        "equalizer=f=250:width_type=s:width=0.8:g=2",
+        # EQ: body (shelf) + presence (peak) + air (shelf)
+        "lowshelf=f=250:width_type=s:width=0.8:g=2",
         "equalizer=f=3000:width_type=s:width=1.0:g=1.5",
-        "equalizer=f=10000:width_type=s:width=0.8:g=1",
+        "highshelf=f=10000:width_type=s:width=0.8:g=1",
         # Gentle compressor
         "acompressor=threshold=0.1:ratio=2:attack=20:release=200",
         # Limiter -1dBTP
@@ -277,10 +277,15 @@ def _process_demucs_chunk(model, chunk_wav, device) -> np.ndarray:
 #### `run_pipeline()` — new order
 
 ```python
-# Step 1: Decode
-current = decode_to_wav(input_path, work_dir / "step0_decoded.wav")
+# Step 0: Decode
+current = decode_to_wav(input_path, ...)
 
-# Step 2: Denoise (before voice isolation — works on original harmonics)
+# Step 0.1: LUFS analysis (always — needed for stats even if loudnorm off)
+measured = analyze_lufs(current)
+
+# Cancellation checkpoint between every step (existing pattern preserved)
+
+# Step 1: Denoise (before voice isolation — works on original harmonics)
 if config.denoise:
     denoised = work_dir / "step1_denoised.wav"
     apply_denoise(current, denoised, engine=config.denoise_engine)
@@ -298,10 +303,11 @@ if config.polish:
     _apply_polish(current, polished)
     current = polished
 
-# Step 5: Loudnorm (at the end)
+# Step 5: Loudnorm (at the end — uses measured stats from analyze_lufs)
 if config.loudnorm:
     normed = work_dir / "step4_loudnorm.wav"
-    apply_loudnorm(current, normed, target=config.loudnorm_target)
+    apply_loudnorm(current, normed, target_lufs=config.loudnorm_target,
+                   measured=measured)
     current = normed
 ```
 
@@ -372,12 +378,26 @@ alSetPreset(p) {
 }
 ```
 
-#### `alProcess()` change
+#### `alCanProcess()` updated
 
-Send `polish` in FormData:
+Include polish in the check:
 
 ```javascript
-fd.append("polish", this.alPolish);
+alCanProcess() {
+    return this.alFile && (this.alLoudnorm || this.alVoiceIsolation ||
+                           this.alDenoise || this.alPolish);
+}
+```
+
+#### `alProcess()` change
+
+Send `polish` in FormData (only in custom mode, matching existing pattern):
+
+```javascript
+if (this.alPreset === 'custom') {
+    // ... existing params ...
+    fd.append("polish", this.alPolish);
+}
 ```
 
 ### 5.2 `app/templates/index.html`
