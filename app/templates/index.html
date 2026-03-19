@@ -537,6 +537,11 @@
                     class="flex-1 px-3 py-2 rounded-lg text-sm transition-colors">
               🎓 <span x-text="t('audiolab_preset_lecture')"></span>
             </button>
+            <button @click="alSetPreset('hq')"
+                    :class="alPreset==='hq' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'"
+                    class="flex-1 px-3 py-2 rounded-lg text-sm transition-colors">
+              ✨ <span x-text="t('audiolab_preset_hq')"></span>
+            </button>
             <button @click="alSetPreset('clean')"
                     :class="alPreset==='clean' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'"
                     class="flex-1 px-3 py-2 rounded-lg text-sm transition-colors">
@@ -603,6 +608,15 @@
                  href="#" class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer">
                 <span x-text="t('audiolab_denoise_howto')"></span> &#8599;
               </a>
+            </div>
+            <!-- Polish toggle -->
+            <div class="flex items-center justify-between mt-2">
+              <label class="flex items-center gap-2 text-sm text-gray-300">
+                <input type="checkbox" x-model="alPolish" :disabled="alPreset!=='custom'"
+                       class="w-4 h-4 rounded border-gray-600 bg-gray-800 text-indigo-500">
+                <span x-text="t('audiolab_polish')"></span>
+                <span class="text-xs text-gray-500 ml-1" x-text="t('audiolab_polish_desc')"></span>
+              </label>
             </div>
           </div>
 

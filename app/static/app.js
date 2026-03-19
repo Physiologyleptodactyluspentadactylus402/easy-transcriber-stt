@@ -65,6 +65,7 @@ function app() {
     alVoiceIsolation: true,
     alDenoise: true,
     alDenoiseEngine: "ffmpeg",
+    alPolish: false,
     alShowGuide: false,
     alStats: null,
     alPlayerSource: 'A',
@@ -604,15 +605,18 @@ function app() {
       this.alPreset = preset;
       if (preset === 'lecture') {
         this.alLoudnorm = true; this.alLoudnormTarget = -16;
-        this.alVoiceIsolation = true; this.alDenoise = true;
+        this.alVoiceIsolation = true; this.alDenoise = true; this.alPolish = false;
+      } else if (preset === 'hq') {
+        this.alLoudnorm = true; this.alLoudnormTarget = -16;
+        this.alVoiceIsolation = true; this.alDenoise = true; this.alPolish = true;
       } else if (preset === 'clean') {
         this.alLoudnorm = true; this.alLoudnormTarget = -16;
-        this.alVoiceIsolation = false; this.alDenoise = false;
+        this.alVoiceIsolation = false; this.alDenoise = false; this.alPolish = false;
       }
     },
 
     alCanProcess() {
-      return this.alFile && (this.alLoudnorm || this.alVoiceIsolation || this.alDenoise);
+      return this.alFile && (this.alLoudnorm || this.alVoiceIsolation || this.alDenoise || this.alPolish);
     },
 
     alMissingDep() {
@@ -637,6 +641,7 @@ function app() {
         formData.append('loudnorm_target', this.alLoudnormTarget);
         formData.append('voice_isolation', this.alVoiceIsolation);
         formData.append('denoise', this.alDenoise);
+        formData.append('polish', this.alPolish);
       }
       formData.append("denoise_engine", this.alDenoiseEngine);
       this.alStatus = 'processing';

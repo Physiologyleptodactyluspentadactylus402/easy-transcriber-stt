@@ -129,5 +129,9 @@
   "audiolab_deepfilter_guide_step3_body": "Close and reopen Transcriber",
   "audiolab_deepfilter_guide_step4_title": "Step 4: Install the package",
   "audiolab_deepfilter_guide_install_btn": "Install DeepFilterNet",
-  "audiolab_deepfilter_guide_warning": "Requires ~8 GB disk space total"
+  "audiolab_deepfilter_guide_warning": "Requires ~8 GB disk space total",
+  "audiolab_preset_hq": "HQ",
+  "audiolab_polish": "Polish",
+  "audiolab_polish_desc": "Warm voice (EQ, compressor, de-esser)",
+  "audiolab_step_polish": "Applying audio polish..."
 }

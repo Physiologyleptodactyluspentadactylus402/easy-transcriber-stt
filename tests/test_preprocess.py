@@ -9,7 +9,7 @@ import pytest
 from app.core.preprocess import (
     PreprocessConfig, PipelineResult, analyze_lufs, apply_denoise,
     apply_loudnorm, apply_voice_isolation, decode_to_wav, run_pipeline,
-    _apply_denoise_ffmpeg,
+    _apply_denoise_ffmpeg, _apply_polish,
 )
 
 
@@ -380,3 +380,74 @@ class TestRunPipeline:
         assert "resample" in result.steps_completed
         assert "demucs" not in result.steps_completed
         assert "deepfilter" not in result.steps_completed
+
+    def test_pipeline_polish_only(self, audio_tone_10s, tmp_path):
+        config = PreprocessConfig(
+            loudnorm=False, voice_isolation=False, denoise=False, polish=True,
+        )
+        result = run_pipeline(audio_tone_10s, tmp_path / "work", config)
+        assert result.processed_path.exists()
+        assert "polish" in result.steps_completed
+        assert result.cancelled is False
+
+    def test_pipeline_hq_preset(self, audio_tone_10s, tmp_path):
+        """HQ preset enables loudnorm + denoise + polish (skip voice_isolation for speed)."""
+        config = PreprocessConfig(
+            loudnorm=True, loudnorm_target=-16.0,
+            voice_isolation=False, denoise=True, polish=True,
+        )
+        result = run_pipeline(audio_tone_10s, tmp_path / "work", config)
+        assert result.processed_path.exists()
+        assert "ffmpeg_denoise" in result.steps_completed
+        assert "polish" in result.steps_completed
+        assert "loudnorm" in result.steps_completed
+
+    def test_pipeline_lecture_no_polish(self, audio_tone_10s, tmp_path):
+        """Lecture preset does NOT include polish."""
+        config = PreprocessConfig(
+            loudnorm=True, voice_isolation=False, denoise=True, polish=False,
+        )
+        result = run_pipeline(audio_tone_10s, tmp_path / "work", config)
+        assert "polish" not in result.steps_completed
+
+    def test_pipeline_order_denoise_before_loudnorm(self, audio_tone_10s, tmp_path):
+        """Verify denoise runs before loudnorm in the new pipeline order."""
+        calls = []
+        def cb(frac, step, msg):
+            calls.append(step)
+        config = PreprocessConfig(
+            loudnorm=True, voice_isolation=False, denoise=True, polish=False,
+        )
+        run_pipeline(audio_tone_10s, tmp_path / "work", config, progress_callback=cb)
+        step_names = [s for s in calls if s in ("ffmpeg_denoise", "loudnorm")]
+        assert step_names == ["ffmpeg_denoise", "loudnorm"]
+
+    def test_pipeline_order_polish_before_loudnorm(self, audio_tone_10s, tmp_path):
+        """Verify polish runs before loudnorm."""
+        calls = []
+        def cb(frac, step, msg):
+            calls.append(step)
+        config = PreprocessConfig(
+            loudnorm=True, voice_isolation=False, denoise=False, polish=True,
+        )
+        run_pipeline(audio_tone_10s, tmp_path / "work", config, progress_callback=cb)
+        step_names = [s for s in calls if s in ("polish", "loudnorm")]
+        assert step_names == ["polish", "loudnorm"]
+
+
+class TestApplyPolish:
+    def test_output_file_is_created(self, audio_tone_10s, tmp_path):
+        output = tmp_path / "polished.wav"
+        result = _apply_polish(audio_tone_10s, output)
+        assert result.exists()
+
+    def test_output_is_48k_mono(self, audio_tone_10s, tmp_path):
+        output = tmp_path / "polished.wav"
+        _apply_polish(audio_tone_10s, output)
+        with wave.open(str(output)) as wf:
+            assert wf.getframerate() == 48000
+            assert wf.getnchannels() == 1
+
+    def test_raises_on_missing_input(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            _apply_polish(tmp_path / "nonexistent.wav", tmp_path / "out.wav")

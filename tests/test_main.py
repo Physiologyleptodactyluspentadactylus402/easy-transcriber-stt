@@ -226,3 +226,34 @@ def test_audiolab_process_accepts_denoise_engine(client, tmp_path):
         )
     assert resp.status_code == 200
     assert "job_id" in resp.json()
+
+
+def test_audiolab_process_hq_preset(client, tmp_path):
+    """POST /api/audiolab/process accepts the 'hq' preset."""
+    wav = tmp_path / "test.wav"
+    import numpy as np, soundfile as sf
+    sf.write(str(wav), np.zeros(16000, dtype=np.float32), 16000)
+    with open(wav, "rb") as f:
+        resp = client.post(
+            "/api/audiolab/process",
+            files={"file": ("test.wav", f, "audio/wav")},
+            data={"preset": "hq"},
+        )
+    assert resp.status_code == 200
+    assert "job_id" in resp.json()
+
+
+def test_audiolab_process_polish_param(client, tmp_path):
+    """POST /api/audiolab/process accepts polish param in custom mode."""
+    wav = tmp_path / "test.wav"
+    import numpy as np, soundfile as sf
+    sf.write(str(wav), np.zeros(16000, dtype=np.float32), 16000)
+    with open(wav, "rb") as f:
+        resp = client.post(
+            "/api/audiolab/process",
+            files={"file": ("test.wav", f, "audio/wav")},
+            data={"preset": "custom", "polish": "true", "loudnorm": "false",
+                  "voice_isolation": "false", "denoise": "false"},
+        )
+    assert resp.status_code == 200
+    assert "job_id" in resp.json()

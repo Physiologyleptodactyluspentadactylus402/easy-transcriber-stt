@@ -34,11 +34,21 @@ except ImportError:
 
 _demucs_model_cache = {}
 
-try:
-    # DeepFilterNet's df.io imports torchaudio.backend.common.AudioMetaData,
-    # which was removed in torchaudio >= 2.1.  Provide a shim if missing.
-    import importlib
-    if importlib.util.find_spec("torchaudio") and not importlib.util.find_spec("torchaudio.backend"):
+# ---------------------------------------------------------------------------
+# torchaudio compatibility shims
+# ---------------------------------------------------------------------------
+# The XPU PyTorch build redirects torchaudio.load/save to TorchCodec which
+# may not be installed.  DeepFilterNet also needs torchaudio.backend.common
+# (removed in torchaudio >= 2.1).  Install soundfile-based fallbacks for all
+# three, BEFORE any library that depends on torchaudio is imported.
+# ---------------------------------------------------------------------------
+import importlib as _importlib
+
+if _importlib.util.find_spec("torchaudio"):
+    import torchaudio as _ta
+
+    # --- shim torchaudio.backend.common (for DeepFilterNet) ---
+    if not _importlib.util.find_spec("torchaudio.backend"):
         import types, sys, collections
         _backend = types.ModuleType("torchaudio.backend")
         _common = types.ModuleType("torchaudio.backend.common")
@@ -50,17 +60,54 @@ try:
         _backend.common = _common
         sys.modules["torchaudio.backend"] = _backend
         sys.modules["torchaudio.backend.common"] = _common
-        # Also shim torchaudio.info if missing (used by df.io)
-        import torchaudio as _ta
-        if not hasattr(_ta, "info"):
-            def _ta_info(filepath, **kw):
-                waveform, sr = _ta.load(filepath)
-                return _common.AudioMetaData(
-                    sample_rate=sr, num_frames=waveform.shape[-1],
-                    num_channels=waveform.shape[0],
-                )
-            _ta.info = _ta_info
 
+    # --- shim torchaudio.info ---
+    if not hasattr(_ta, "info"):
+        def _ta_info(filepath, **kw):
+            _fi = sf.info(str(filepath))
+            _bits = 0
+            if _fi.subtype:
+                _m = __import__("re").search(r"\d+", _fi.subtype)
+                if _m:
+                    _bits = int(_m.group())
+            from torchaudio.backend.common import AudioMetaData as _AMD
+            return _AMD(
+                sample_rate=_fi.samplerate,
+                num_frames=_fi.frames,
+                num_channels=_fi.channels,
+                bits_per_sample=_bits,
+                encoding=_fi.subtype or "",
+            )
+        _ta.info = _ta_info
+
+    # --- guard torchaudio.load (fallback to soundfile) ---
+    _orig_ta_load = _ta.load
+
+    def _safe_ta_load(filepath, *args, **kw):
+        try:
+            return _orig_ta_load(filepath, *args, **kw)
+        except (RuntimeError, OSError, ImportError):
+            data, sr = sf.read(str(filepath), dtype="float32", always_2d=True)
+            tensor = torch.from_numpy(data.T)
+            return tensor, sr
+
+    _ta.load = _safe_ta_load
+
+    # --- guard torchaudio.save (fallback to soundfile) ---
+    _orig_ta_save = _ta.save
+
+    def _safe_ta_save(filepath, src, sample_rate, *args, **kw):
+        try:
+            return _orig_ta_save(filepath, src, sample_rate, *args, **kw)
+        except (RuntimeError, OSError, ImportError):
+            audio_np = src.cpu().numpy()
+            if audio_np.ndim == 2:
+                audio_np = audio_np.T
+            sf.write(str(filepath), audio_np, sample_rate)
+
+    _ta.save = _safe_ta_save
+
+try:
     from df.enhance import enhance, init_df, load_audio, save_audio
     _DEEPFILTER_AVAILABLE = True
 except ImportError:
@@ -371,13 +418,12 @@ def _select_device() -> str:
     return "cpu"
 
 
-def _run_demucs(wav_path: Path) -> np.ndarray:
-    """Run Demucs htdemucs and return the vocals stem as numpy array at 44.1kHz.
+DEMUCS_CHUNK_SEC = 300     # 5-minute chunks
+DEMUCS_OVERLAP_SEC = 5     # 5-second crossfade overlap
 
-    Optimisations applied when running on GPU (CUDA / Intel Arc XPU):
-    - channels_last memory format (NHWC) — native layout for Intel Arc
-    - float16 autocast — 3-4x faster inference on Arc GPUs
-    """
+
+def _get_demucs_model():
+    """Get or create cached Demucs model on the best available device."""
     if not _DEMUCS_AVAILABLE:
         raise RuntimeError("Demucs is not installed.")
 
@@ -386,42 +432,109 @@ def _run_demucs(wav_path: Path) -> np.ndarray:
         model = get_model(model_name)
         device = _select_device()
         model.to(device)
-        # Use channels_last (NHWC) on GPU — native format for Intel Arc convolutions
         if device != "cpu":
             try:
                 model = model.to(memory_format=torch.channels_last)
             except Exception:
-                pass  # graceful fallback if not supported
+                pass
         _demucs_model_cache[model_name] = (model, device)
+    return _demucs_model_cache[model_name]
 
-    model, device = _demucs_model_cache[model_name]
 
-    # Load audio
+def _process_demucs_chunk(model, chunk_wav, device) -> np.ndarray:
+    """Process a single stereo chunk through Demucs, with OOM fallback."""
+    ref = chunk_wav.mean(0)
+    chunk_wav = (chunk_wav - ref.mean()) / ref.std()
+    chunk_wav = chunk_wav.unsqueeze(0).to(device)
+
+    try:
+        with torch.no_grad():
+            if device != "cpu":
+                with torch.autocast(device_type=device, dtype=torch.float16):
+                    sources = apply_model(model, chunk_wav, device=device)
+            else:
+                sources = apply_model(model, chunk_wav, device=device)
+    except RuntimeError as exc:
+        if "out of memory" in str(exc).lower():
+            logger.warning("GPU OOM on chunk — falling back to CPU")
+            if hasattr(torch, "xpu"):
+                torch.xpu.empty_cache()
+            elif torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            model_cpu = model.cpu()
+            chunk_cpu = chunk_wav.cpu()
+            with torch.no_grad():
+                sources = apply_model(model_cpu, chunk_cpu, device="cpu")
+            model.to(device)
+        else:
+            raise
+
+    vocals_idx = model.sources.index("vocals")
+    return sources[0, vocals_idx].mean(0).cpu().float().numpy()
+
+
+def _run_demucs(wav_path: Path) -> np.ndarray:
+    """Run Demucs htdemucs with chunked processing to avoid GPU OOM.
+
+    Splits audio into 5-minute chunks with 5-second overlap, processes each
+    on GPU, then reassembles with linear crossfade in the overlap regions.
+    """
+    model, device = _get_demucs_model()
+
     wav, sr = torchaudio.load(str(wav_path))
-    # Demucs expects stereo — if mono, duplicate
     if wav.shape[0] == 1:
         wav = wav.repeat(2, 1)
-    # Resample to model's sample rate if needed
     if sr != model.samplerate:
         wav = torchaudio.transforms.Resample(sr, model.samplerate)(wav)
+    sr = model.samplerate
 
-    # Add batch dim and move to device
-    ref = wav.mean(0)
-    wav = (wav - ref.mean()) / ref.std()
-    wav = wav.unsqueeze(0).to(device)
+    total_samples = wav.shape[1]
+    chunk_samples = DEMUCS_CHUNK_SEC * sr
+    overlap_samples = DEMUCS_OVERLAP_SEC * sr
+    step_samples = chunk_samples - overlap_samples
 
-    with torch.no_grad():
-        # Use float16 autocast on GPU for ~3-4x speedup (tested on Intel Arc)
-        if device != "cpu":
-            with torch.autocast(device_type=device, dtype=torch.float16):
-                sources = apply_model(model, wav, device=device)
+    # Short file — process as single chunk
+    if total_samples <= chunk_samples:
+        return _process_demucs_chunk(model, wav, device)
+
+    logger.info(
+        "Chunked Demucs: %d samples, chunk=%ds, overlap=%ds, ~%d chunks",
+        total_samples, DEMUCS_CHUNK_SEC, DEMUCS_OVERLAP_SEC,
+        (total_samples + step_samples - 1) // step_samples,
+    )
+
+    vocals = np.zeros(total_samples, dtype=np.float32)
+    chunk_idx = 0
+
+    for start in range(0, total_samples, step_samples):
+        end = min(start + chunk_samples, total_samples)
+        chunk = wav[:, start:end]
+        chunk_vocals = _process_demucs_chunk(model, chunk, device)
+
+        if start == 0:
+            # First chunk — no crossfade needed
+            vocals[start:end] = chunk_vocals[:end - start]
         else:
-            sources = apply_model(model, wav, device=device)
+            # Crossfade the overlap region
+            ol_len = min(overlap_samples, end - start, len(chunk_vocals))
+            fade_in = np.linspace(0.0, 1.0, ol_len, dtype=np.float32)
+            fade_out = 1.0 - fade_in
+            vocals[start:start + ol_len] = (
+                vocals[start:start + ol_len] * fade_out
+                + chunk_vocals[:ol_len] * fade_in
+            )
+            # Copy the rest (non-overlap portion)
+            rest_start = ol_len
+            rest_len = (end - start) - ol_len
+            if rest_len > 0:
+                vocals[start + ol_len:end] = chunk_vocals[rest_start:rest_start + rest_len]
 
-    # sources shape: (batch, num_sources, channels, samples)
-    # source order: drums, bass, other, vocals
-    vocals_idx = model.sources.index("vocals")
-    vocals = sources[0, vocals_idx].mean(0).cpu().float().numpy()  # mono, ensure fp32
+        chunk_idx += 1
+        logger.debug("Demucs chunk %d done: samples %d-%d", chunk_idx, start, end)
+
+        if end >= total_samples:
+            break
+
     return vocals
 
 
@@ -460,7 +573,17 @@ def _run_deepfilter(wav_path: Path) -> np.ndarray:
         raise RuntimeError("DeepFilterNet is not installed.")
 
     if "model" not in _deepfilter_cache:
+        # Force CPU: DeepFilterNet doesn't support XPU.  Its config()
+        # reads os.environ["DEVICE"] (upper-cased option name).
+        import os as _os
+        _prev_device = _os.environ.get("DEVICE")
+        _os.environ["DEVICE"] = "cpu"
         model, df_state, _ = init_df()
+        model = model.cpu()
+        if _prev_device is None:
+            _os.environ.pop("DEVICE", None)
+        else:
+            _os.environ["DEVICE"] = _prev_device
         _deepfilter_cache["model"] = model
         _deepfilter_cache["df_state"] = df_state
 
@@ -522,6 +645,55 @@ def apply_denoise(wav_path: Path, output_path: Path, engine: str = "ffmpeg") -> 
 
 
 # ---------------------------------------------------------------------------
+# Audio polish (high-pass, de-esser, EQ, compressor, limiter)
+# ---------------------------------------------------------------------------
+
+
+def _apply_polish(wav_path: Path, output_path: Path) -> Path:
+    """Apply audio polish: high-pass, de-esser, EQ, compressor, limiter.
+
+    All filters run in a single ffmpeg pass — no intermediate files.
+    """
+    wav_path = Path(wav_path)
+    if not wav_path.exists():
+        raise FileNotFoundError(f"Input WAV file not found: {wav_path}")
+
+    ffmpeg = _require_ffmpeg()
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    af = ",".join([
+        # High-pass: remove rumble below 80Hz
+        "highpass=f=80:poles=2",
+        # De-esser: boost sibilant band → compress → cut back
+        "equalizer=f=6000:width_type=s:width=2.0:g=3",
+        "acompressor=threshold=0.1:ratio=4:attack=5:release=50",
+        "equalizer=f=6000:width_type=s:width=2.0:g=-3",
+        # EQ: body (shelf) + presence (peak) + air (shelf)
+        "lowshelf=f=250:width_type=s:width=0.8:g=2",
+        "equalizer=f=3000:width_type=s:width=1.0:g=1.5",
+        "highshelf=f=10000:width_type=s:width=0.8:g=1",
+        # Gentle compressor
+        "acompressor=threshold=0.1:ratio=2:attack=20:release=200",
+        # Limiter -1dBTP (0.891 linear)
+        "alimiter=limit=0.891:level=disabled",
+    ])
+    cmd = [
+        ffmpeg, "-y", "-i", str(wav_path),
+        "-af", af,
+        "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le",
+        str(output_path),
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        stderr_text = result.stderr.decode(errors="replace")
+        logger.error("ffmpeg polish failed (rc=%d):\n%s", result.returncode, stderr_text)
+        raise RuntimeError(f"ffmpeg polish failed: {stderr_text}")
+    logger.info("Polish: %s → %s", wav_path.name, output_path.name)
+    return output_path.resolve()
+
+
+# ---------------------------------------------------------------------------
 # Task 5 — pipeline orchestrator
 # ---------------------------------------------------------------------------
 
@@ -549,6 +721,7 @@ class PreprocessConfig:
     voice_isolation: bool = True
     denoise: bool = True
     denoise_engine: str = "ffmpeg"
+    polish: bool = False
 
 
 @dataclass
@@ -560,6 +733,21 @@ class PipelineResult:
     stats: dict | None = None
     cancelled: bool = False
     steps_completed: list[str] = field(default_factory=list)
+
+
+def _early_return(
+    original_wav: Path, current: Path, original_lufs: float,
+    steps_completed: list[str], work_dir: Path,
+) -> PipelineResult:
+    """Build a cancelled PipelineResult, resampling current to 16kHz."""
+    processed_16k = work_dir / "processed.wav"
+    _resample_to_16k(current, processed_16k)
+    return PipelineResult(
+        original_path=original_wav, processed_path=processed_16k,
+        processed_48k_path=current,
+        stats={"original_lufs": original_lufs},
+        cancelled=True, steps_completed=steps_completed,
+    )
 
 
 def run_pipeline(
@@ -605,62 +793,54 @@ def run_pipeline(
     original_lufs = lufs_stats["input_i"]
 
     if _cancelled():
-        return PipelineResult(
-            original_path=original_wav,
-            processed_path=original_wav,
-            processed_48k_path=original_wav,
-            stats={"original_lufs": original_lufs},
-            cancelled=True,
-            steps_completed=steps_completed,
-        )
+        return _early_return(original_wav, original_wav, original_lufs, steps_completed, work_dir)
 
     # Track the current working file (48kHz)
     current = original_wav
 
-    # Step 1: Loudnorm
-    if config.loudnorm:
-        _progress(0.2, "loudnorm", f"Normalizing to {config.loudnorm_target} LUFS...")
-        normalized = work_dir / "step1_loudnorm.wav"
-        apply_loudnorm(current, normalized, target_lufs=config.loudnorm_target, measured=lufs_stats)
-        current = normalized
-        steps_completed.append("loudnorm")
+    # Step 1: Denoise (before voice isolation — preserves original harmonics)
+    if config.denoise:
+        if _cancelled():
+            return _early_return(original_wav, current, original_lufs, steps_completed, work_dir)
+        engine_label = "deepfilter" if config.denoise_engine == "deepfilter" else "ffmpeg_denoise"
+        _progress(0.15, engine_label, "Removing noise...")
+        denoised = work_dir / "step1_denoised.wav"
+        apply_denoise(current, denoised, engine=config.denoise_engine)
+        current = denoised
+        steps_completed.append(engine_label)
 
-    if _cancelled():
-        processed_16k = work_dir / "processed.wav"
-        _resample_to_16k(current, processed_16k)
-        return PipelineResult(
-            original_path=original_wav, processed_path=processed_16k,
-            processed_48k_path=current,
-            stats={"original_lufs": original_lufs},
-            cancelled=True, steps_completed=steps_completed,
-        )
-
-    # Step 2: Voice isolation
+    # Step 2: Voice isolation (chunked Demucs)
     if config.voice_isolation:
-        _progress(0.4, "demucs", "Isolating voice (this may take a while)...")
+        if _cancelled():
+            return _early_return(original_wav, current, original_lufs, steps_completed, work_dir)
+        _progress(0.3, "demucs", "Isolating voice (this may take a while)...")
         vocals = work_dir / "step2_vocals.wav"
         apply_voice_isolation(current, vocals)
         current = vocals
         steps_completed.append("demucs")
 
-    if _cancelled():
-        processed_16k = work_dir / "processed.wav"
-        _resample_to_16k(current, processed_16k)
-        return PipelineResult(
-            original_path=original_wav, processed_path=processed_16k,
-            processed_48k_path=current,
-            stats={"original_lufs": original_lufs},
-            cancelled=True, steps_completed=steps_completed,
-        )
+    # Step 3: Polish (high-pass, de-esser, EQ, compressor, limiter)
+    if config.polish:
+        if _cancelled():
+            return _early_return(original_wav, current, original_lufs, steps_completed, work_dir)
+        _progress(0.7, "polish", "Applying audio polish...")
+        polished = work_dir / "step3_polished.wav"
+        _apply_polish(current, polished)
+        current = polished
+        steps_completed.append("polish")
 
-    # Step 3: Denoise
-    if config.denoise:
-        engine_label = "deepfilter" if config.denoise_engine == "deepfilter" else "ffmpeg_denoise"
-        _progress(0.7, engine_label, "Removing noise...")
-        denoised = work_dir / "step3_denoised.wav"
-        apply_denoise(current, denoised, engine=config.denoise_engine)
-        current = denoised
-        steps_completed.append(engine_label)
+    # Step 4: Loudnorm (at the end — normalizes the final result)
+    if config.loudnorm:
+        if _cancelled():
+            return _early_return(original_wav, current, original_lufs, steps_completed, work_dir)
+        _progress(0.8, "loudnorm", f"Normalizing to {config.loudnorm_target} LUFS...")
+        normalized = work_dir / "step4_loudnorm.wav"
+        # Re-analyze current file since it's been modified by previous steps.
+        # Pass measured= to skip the redundant pass-1 inside apply_loudnorm.
+        current_lufs = analyze_lufs(current) if current != original_wav else lufs_stats
+        apply_loudnorm(current, normalized, target_lufs=config.loudnorm_target, measured=current_lufs)
+        current = normalized
+        steps_completed.append("loudnorm")
 
     # Final: save 48kHz copy for player + 16kHz for transcription
     _progress(0.9, "resample", "Preparing final output...")

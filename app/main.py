@@ -402,6 +402,7 @@ def create_app(
         voice_isolation: bool = Form(True),
         denoise: bool = Form(True),
         denoise_engine: str = Form("ffmpeg"),
+        polish: bool = Form(False),
     ):
         import uuid
         job_id = str(uuid.uuid4())
@@ -418,11 +419,15 @@ def create_app(
         if preset == "lecture":
             config = PreprocessConfig(loudnorm=True, loudnorm_target=-16.0,
                                       voice_isolation=True, denoise=True,
-                                      denoise_engine=denoise_engine)
+                                      denoise_engine=denoise_engine, polish=False)
+        elif preset == "hq":
+            config = PreprocessConfig(loudnorm=True, loudnorm_target=-16.0,
+                                      voice_isolation=True, denoise=True,
+                                      denoise_engine=denoise_engine, polish=True)
         elif preset == "clean":
             config = PreprocessConfig(loudnorm=True, loudnorm_target=-16.0,
                                       voice_isolation=False, denoise=False,
-                                      denoise_engine=denoise_engine)
+                                      denoise_engine=denoise_engine, polish=False)
         else:  # custom
             config = PreprocessConfig(
                 loudnorm=loudnorm,
@@ -430,6 +435,7 @@ def create_app(
                 voice_isolation=voice_isolation,
                 denoise=denoise,
                 denoise_engine=denoise_engine,
+                polish=polish,
             )
 
         job = AudioLabJob(id=job_id, original_filename=file.filename or "upload")
