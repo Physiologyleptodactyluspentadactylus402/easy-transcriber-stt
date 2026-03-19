@@ -724,6 +724,147 @@ class PreprocessConfig:
     polish: bool = False
 
 
+# ---------------------------------------------------------------------------
+# Pipeline step definitions for progress stepper
+# ---------------------------------------------------------------------------
+
+_PIPELINE_STEPS: list[tuple[str, str]] = [
+    ("decode",   "audiolab_stepper_decode"),
+    ("analyze",  "audiolab_stepper_analyze"),
+    ("denoise",  "audiolab_stepper_denoise"),
+    ("demucs",   "audiolab_stepper_demucs"),
+    ("polish",   "audiolab_stepper_polish"),
+    ("loudnorm", "audiolab_stepper_loudnorm"),
+    ("resample", "audiolab_stepper_resample"),
+]
+
+_STEP_WEIGHTS = {
+    "ffmpeg": {
+        "decode": 0.05, "analyze": 0.03, "denoise": 0.10,
+        "demucs": 0.52, "polish": 0.05, "loudnorm": 0.15, "resample": 0.10,
+    },
+    "deepfilter": {
+        "decode": 0.05, "analyze": 0.03, "denoise": 0.18,
+        "demucs": 0.47, "polish": 0.05, "loudnorm": 0.12, "resample": 0.10,
+    },
+}
+
+# Map step_id → config attribute that controls whether the step is active
+_STEP_ACTIVE_MAP = {
+    "decode":   None,   # always active
+    "analyze":  None,   # always active
+    "denoise":  "denoise",
+    "demucs":   "voice_isolation",
+    "polish":   "polish",
+    "loudnorm": "loudnorm",
+    "resample": None,   # always active
+}
+
+
+def build_step_list(config: PreprocessConfig) -> list[dict]:
+    """Return the ordered list of pipeline steps with activation status.
+
+    Each item is a dict with keys: id, label_key, active.
+    """
+    result = []
+    for step_id, label_key in _PIPELINE_STEPS:
+        attr = _STEP_ACTIVE_MAP[step_id]
+        active = getattr(config, attr) if attr else True
+        result.append({"id": step_id, "label_key": label_key, "active": active})
+    return result
+
+
+class PipelineProgressTracker:
+    """Tracks progress across pipeline steps for the UI stepper."""
+
+    def __init__(self, step_list: list[dict], denoise_engine: str = "ffmpeg"):
+        self._step_list = step_list
+        active_ids = [s["id"] for s in step_list if s["active"]]
+        raw_weights = _STEP_WEIGHTS.get(denoise_engine, _STEP_WEIGHTS["ffmpeg"])
+        total_raw = sum(raw_weights.get(sid, 0) for sid in active_ids)
+        if total_raw > 0:
+            self._weights = {sid: raw_weights.get(sid, 0) / total_raw for sid in active_ids}
+        else:
+            # fallback: equal weights
+            n = len(active_ids)
+            self._weights = {sid: 1.0 / n for sid in active_ids} if n else {}
+
+        self._start_time: float | None = None
+        self._current_step: str | None = None
+        self._step_start: float | None = None
+        self._completed: list[str] = []
+        self._step_durations: dict[str, float] = {}
+        self._sub_progress: float | None = None
+        self._sub_label: str | None = None
+        self._last_completed_step: str | None = None
+        self._last_completed_elapsed: float | None = None
+
+    def start(self):
+        """Record the pipeline start time."""
+        import time
+        self._start_time = time.monotonic()
+
+    def begin_step(self, step_id: str):
+        """Mark a step as in-progress."""
+        import time
+        self._current_step = step_id
+        self._step_start = time.monotonic()
+        self._sub_progress = None
+        self._sub_label = None
+
+    def complete_step(self, step_id: str):
+        """Record that a step has completed."""
+        import time
+        now = time.monotonic()
+        duration = now - self._step_start if self._step_start else 0.0
+        self._step_durations[step_id] = duration
+        self._completed.append(step_id)
+        self._last_completed_step = step_id
+        self._last_completed_elapsed = duration
+
+    def update_sub_progress(self, fraction: float, label: str):
+        """Update sub-step (chunk-level) progress."""
+        self._sub_progress = fraction
+        self._sub_label = label
+
+    def get_progress_data(self) -> dict:
+        """Return current progress state for the UI."""
+        import time
+
+        completed_weight = sum(self._weights.get(sid, 0) for sid in self._completed)
+
+        # Add partial weight for current step based on sub-progress
+        partial = 0.0
+        if self._current_step and self._sub_progress is not None:
+            if self._current_step not in self._completed:
+                partial = self._weights.get(self._current_step, 0) * self._sub_progress
+
+        progress = completed_weight + partial
+
+        elapsed = (time.monotonic() - self._start_time) if self._start_time else 0.0
+
+        # ETA: only after at least one step completed
+        eta = None
+        if self._completed and completed_weight > 0 and elapsed > 0:
+            pace = elapsed / completed_weight
+            remaining_weight = 1.0 - completed_weight - partial
+            eta = max(0.0, remaining_weight * pace)
+
+        return {
+            "progress": progress,
+            "step": self._current_step,
+            "sub_progress": self._sub_progress,
+            "sub_label": self._sub_label,
+            "elapsed_sec": round(elapsed, 3),
+            "eta_sec": round(eta, 1) if eta is not None else None,
+            "completed_step": self._last_completed_step,
+            "completed_step_elapsed": (
+                round(self._last_completed_elapsed, 3)
+                if self._last_completed_elapsed is not None else None
+            ),
+        }
+
+
 @dataclass
 class PipelineResult:
     """Result of a preprocessing pipeline run."""

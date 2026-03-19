@@ -10,6 +10,7 @@ from app.core.preprocess import (
     PreprocessConfig, PipelineResult, analyze_lufs, apply_denoise,
     apply_loudnorm, apply_voice_isolation, decode_to_wav, run_pipeline,
     _apply_denoise_ffmpeg, _apply_polish,
+    build_step_list, PipelineProgressTracker, _PIPELINE_STEPS,
 )
 
 
@@ -451,3 +452,144 @@ class TestApplyPolish:
     def test_raises_on_missing_input(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             _apply_polish(tmp_path / "nonexistent.wav", tmp_path / "out.wav")
+
+
+# ---------------------------------------------------------------------------
+# Task — build_step_list
+# ---------------------------------------------------------------------------
+
+
+class TestBuildStepList:
+    def test_lecture_preset(self):
+        """Lecture preset: loudnorm=True, voice_isolation=False, denoise=True, polish=False."""
+        config = PreprocessConfig(
+            loudnorm=True, voice_isolation=False, denoise=True, polish=False,
+        )
+        steps = build_step_list(config)
+        active_ids = {s["id"] for s in steps if s["active"]}
+        inactive_ids = {s["id"] for s in steps if not s["active"]}
+        assert "demucs" in inactive_ids
+        assert "polish" in inactive_ids
+        assert {"decode", "analyze", "denoise", "loudnorm", "resample"} <= active_ids
+
+    def test_hq_preset(self):
+        """HQ preset: all enabled → all active."""
+        config = PreprocessConfig(
+            loudnorm=True, voice_isolation=True, denoise=True, polish=True,
+        )
+        steps = build_step_list(config)
+        assert all(s["active"] for s in steps)
+
+    def test_all_disabled(self):
+        """All optional disabled → only decode, analyze, resample active."""
+        config = PreprocessConfig(
+            loudnorm=False, voice_isolation=False, denoise=False, polish=False,
+        )
+        steps = build_step_list(config)
+        active_ids = {s["id"] for s in steps if s["active"]}
+        assert active_ids == {"decode", "analyze", "resample"}
+
+    def test_label_keys_are_stepper_keys(self):
+        """All label_keys start with 'audiolab_stepper_'."""
+        config = PreprocessConfig()
+        steps = build_step_list(config)
+        for s in steps:
+            assert s["label_key"].startswith("audiolab_stepper_"), (
+                f"label_key {s['label_key']!r} does not start with 'audiolab_stepper_'"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Task — PipelineProgressTracker
+# ---------------------------------------------------------------------------
+
+
+class TestPipelineProgressTracker:
+    def _make_tracker(self, **config_kwargs):
+        config = PreprocessConfig(**config_kwargs)
+        steps = build_step_list(config)
+        engine = config_kwargs.get("denoise_engine", "ffmpeg")
+        tracker = PipelineProgressTracker(steps, denoise_engine=engine)
+        return tracker, steps
+
+    def test_initial_state(self):
+        tracker, _ = self._make_tracker()
+        data = tracker.get_progress_data()
+        assert data["progress"] == 0
+        assert data["step"] is None
+        assert data["eta_sec"] is None
+
+    def test_begin_step(self):
+        tracker, _ = self._make_tracker()
+        tracker.start()
+        tracker.begin_step("decode")
+        data = tracker.get_progress_data()
+        assert data["step"] == "decode"
+
+    def test_complete_step(self):
+        tracker, _ = self._make_tracker()
+        tracker.start()
+        tracker.begin_step("decode")
+        tracker.complete_step("decode")
+        data = tracker.get_progress_data()
+        assert data["completed_step"] == "decode"
+        assert data["progress"] > 0
+
+    def test_eta_after_one_step(self):
+        import time
+        tracker, _ = self._make_tracker()
+        tracker.start()
+        tracker.begin_step("decode")
+        # Fake elapsed time by backdating start
+        tracker._start_time -= 2.0
+        tracker.complete_step("decode")
+        data = tracker.get_progress_data()
+        assert data["eta_sec"] is not None
+        assert data["eta_sec"] > 0
+
+    def test_eta_is_none_before_any_completion(self):
+        tracker, _ = self._make_tracker()
+        tracker.start()
+        tracker.begin_step("decode")
+        data = tracker.get_progress_data()
+        assert data["eta_sec"] is None
+
+    def test_skipped_steps_excluded_from_weights(self):
+        """Normalized weights for active steps only should sum to ~1.0."""
+        tracker, _ = self._make_tracker(
+            loudnorm=False, voice_isolation=False, denoise=False, polish=False,
+        )
+        total = sum(tracker._weights.values())
+        assert abs(total - 1.0) < 1e-6
+
+    def test_sub_progress(self):
+        tracker, _ = self._make_tracker()
+        tracker.start()
+        tracker.begin_step("decode")
+        tracker.update_sub_progress(0.5, "chunk 3/6")
+        data = tracker.get_progress_data()
+        assert data["sub_progress"] == 0.5
+        assert data["sub_label"] == "chunk 3/6"
+
+    def test_sub_progress_clears_on_new_step(self):
+        tracker, _ = self._make_tracker()
+        tracker.start()
+        tracker.begin_step("decode")
+        tracker.update_sub_progress(0.5, "chunk 3/6")
+        tracker.complete_step("decode")
+        tracker.begin_step("analyze")
+        data = tracker.get_progress_data()
+        assert data["sub_progress"] is None
+        assert data["sub_label"] is None
+
+    def test_progress_reaches_1_when_all_done(self):
+        tracker, steps = self._make_tracker(
+            loudnorm=False, voice_isolation=False, denoise=False, polish=False,
+        )
+        tracker.start()
+        for s in steps:
+            if s["active"]:
+                tracker.begin_step(s["id"])
+                tracker.complete_step(s["id"])
+        data = tracker.get_progress_data()
+        assert abs(data["progress"] - 1.0) < 1e-6
