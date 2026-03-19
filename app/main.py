@@ -509,10 +509,17 @@ def create_app(
 
     async def _run_audiolab(job, input_path, cache_dir, config):
         """Run the preprocessing pipeline in a background thread."""
-        from app.core.preprocess import run_pipeline
+        from app.core.preprocess import run_pipeline, build_step_list
         loop = asyncio.get_running_loop()
 
-        def _progress(frac, step, msg):
+        step_list = build_step_list(config)
+        await _ws_manager.broadcast_global({
+            "type": "audiolab_steps",
+            "job_id": job.id,
+            "steps": step_list,
+        })
+
+        def _progress(frac, step, msg, **kwargs):
             job.progress = frac
             job.current_step = step
             job.message = msg
@@ -524,6 +531,12 @@ def create_app(
                     "progress": frac,
                     "step": step,
                     "message": msg,
+                    "sub_progress": kwargs.get("sub_progress"),
+                    "sub_label": kwargs.get("sub_label"),
+                    "elapsed_sec": kwargs.get("elapsed_sec", 0),
+                    "eta_sec": kwargs.get("eta_sec"),
+                    "completed_step": kwargs.get("completed_step"),
+                    "completed_step_elapsed": kwargs.get("completed_step_elapsed"),
                 }),
             )
 
