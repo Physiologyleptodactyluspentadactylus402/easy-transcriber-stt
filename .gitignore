@@ -21,3 +21,6 @@ Thumbs.db
 .idea/
 .vscode/
 .superpowers/
+
+# Test audio files
+test_audio.*
