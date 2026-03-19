@@ -133,5 +133,12 @@
   "audiolab_preset_hq": "HQ",
   "audiolab_polish": "Rifinitura",
   "audiolab_polish_desc": "Voce calda (EQ, compressore, de-esser)",
-  "audiolab_step_polish": "Rifinitura audio in corso..."
+  "audiolab_step_polish": "Rifinitura audio in corso...",
+  "audiolab_stepper_decode": "Decodifica audio",
+  "audiolab_stepper_analyze": "Analisi loudness",
+  "audiolab_stepper_denoise": "Rimozione rumore",
+  "audiolab_stepper_demucs": "Isolamento voce",
+  "audiolab_stepper_polish": "Rifinitura audio",
+  "audiolab_stepper_loudnorm": "Normalizzazione loudness",
+  "audiolab_stepper_resample": "Preparazione output"
 }

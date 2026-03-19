@@ -133,5 +133,12 @@
   "audiolab_preset_hq": "HQ",
   "audiolab_polish": "Polish",
   "audiolab_polish_desc": "Warm voice (EQ, compressor, de-esser)",
-  "audiolab_step_polish": "Applying audio polish..."
+  "audiolab_step_polish": "Applying audio polish...",
+  "audiolab_stepper_decode": "Decode audio",
+  "audiolab_stepper_analyze": "Analyze loudness",
+  "audiolab_stepper_denoise": "Remove noise",
+  "audiolab_stepper_demucs": "Voice isolation",
+  "audiolab_stepper_polish": "Audio polish",
+  "audiolab_stepper_loudnorm": "Normalize loudness",
+  "audiolab_stepper_resample": "Prepare output"
 }
