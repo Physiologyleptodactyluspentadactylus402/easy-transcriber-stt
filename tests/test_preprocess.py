@@ -295,6 +295,7 @@ class TestApplyDenoiseDispatcher:
         assert result.exists()
         mock_df.assert_called_once()
 
+    @patch("app.core.preprocess._DEEPFILTER_AVAILABLE", False)
     def test_dispatcher_deepfilter_unavailable(self, audio_tone_10s, tmp_path):
         output = tmp_path / "denoised.wav"
         with pytest.raises(RuntimeError, match="DeepFilterNet is not installed"):

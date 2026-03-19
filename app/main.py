@@ -722,12 +722,14 @@ async def _run_audiolab_install(
 
         _send(0.9, "Verifying import...")
 
-        # Re-check availability after install
+        # Verify the package was installed (lightweight check)
         import importlib
         if tool_name == "demucs":
             importlib.import_module("demucs")
         elif tool_name == "deepfilter":
-            importlib.import_module("df")
+            # Import deepfilterlib (the native extension) rather than df.enhance
+            # which pulls in torchaudio.backend (removed in newer torchaudio)
+            importlib.import_module("deepfilterlib")
 
         _send(1.0, "Done")
 

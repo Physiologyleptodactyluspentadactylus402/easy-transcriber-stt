@@ -35,6 +35,32 @@ except ImportError:
 _demucs_model_cache = {}
 
 try:
+    # DeepFilterNet's df.io imports torchaudio.backend.common.AudioMetaData,
+    # which was removed in torchaudio >= 2.1.  Provide a shim if missing.
+    import importlib
+    if importlib.util.find_spec("torchaudio") and not importlib.util.find_spec("torchaudio.backend"):
+        import types, sys, collections
+        _backend = types.ModuleType("torchaudio.backend")
+        _common = types.ModuleType("torchaudio.backend.common")
+        _common.AudioMetaData = collections.namedtuple(
+            "AudioMetaData", ["sample_rate", "num_frames", "num_channels",
+                              "bits_per_sample", "encoding"],
+            defaults=[0, 0, 0, 0, ""],
+        )
+        _backend.common = _common
+        sys.modules["torchaudio.backend"] = _backend
+        sys.modules["torchaudio.backend.common"] = _common
+        # Also shim torchaudio.info if missing (used by df.io)
+        import torchaudio as _ta
+        if not hasattr(_ta, "info"):
+            def _ta_info(filepath, **kw):
+                waveform, sr = _ta.load(filepath)
+                return _common.AudioMetaData(
+                    sample_rate=sr, num_frames=waveform.shape[-1],
+                    num_channels=waveform.shape[0],
+                )
+            _ta.info = _ta_info
+
     from df.enhance import enhance, init_df, load_audio, save_audio
     _DEEPFILTER_AVAILABLE = True
 except ImportError:
