@@ -66,6 +66,11 @@ function app() {
     alDenoise: true,
     alDenoiseEngine: "ffmpeg",
     alPolish: false,
+    alSteps: [],
+    alElapsed: 0,
+    alEta: null,
+    alSubProgress: null,
+    alSubLabel: '',
     alShowGuide: false,
     alStats: null,
     alPlayerSource: 'A',
@@ -289,11 +294,37 @@ function app() {
         this._liveTimerInterval = null;
 
       // Audio Lab progress
+      } else if (msg.type === 'audiolab_steps') {
+        if (msg.job_id === this.alJobId) {
+          this.alSteps = msg.steps.map(s => ({
+            ...s,
+            status: s.active ? 'pending' : 'skipped',
+            elapsed: null,
+          }));
+        }
       } else if (msg.type === 'audiolab_progress') {
         if (msg.job_id === this.alJobId) {
           this.alProgress = msg.progress;
           this.alStep = msg.step;
           this.alMessage = msg.message;
+          this.alElapsed = msg.elapsed_sec || 0;
+          this.alEta = msg.eta_sec;
+          this.alSubProgress = msg.sub_progress;
+          this.alSubLabel = msg.sub_label || '';
+
+          // Mark completed step
+          if (msg.completed_step) {
+            const cs = this.alSteps.find(s => s.id === msg.completed_step);
+            if (cs) {
+              cs.status = 'completed';
+              cs.elapsed = msg.completed_step_elapsed;
+            }
+          }
+          // Mark current step as active
+          if (msg.step && msg.step !== 'done') {
+            const cur = this.alSteps.find(s => s.id === msg.step);
+            if (cur && cur.status === 'pending') cur.status = 'active';
+          }
         }
       } else if (msg.type === 'audiolab_done') {
         if (msg.job_id === this.alJobId) {
@@ -302,6 +333,12 @@ function app() {
           this.alOriginalUrl = msg.original_url;
           this.alProcessedUrl = msg.processed_url;
           this.alStats = msg.stats;
+          // Mark all active steps as completed
+          this.alSteps.forEach(s => {
+            if ((s.status === 'active' || s.status === 'pending') && s.active) {
+              s.status = 'completed';
+            }
+          });
         }
       } else if (msg.type === 'audiolab_error') {
         if (msg.job_id === this.alJobId) {
@@ -582,6 +619,15 @@ function app() {
       return map[hint] || 'bg-gray-800 text-gray-400';
     },
 
+    _formatEta(seconds) {
+      if (seconds == null) return '';
+      const s = Math.round(seconds);
+      if (s < 60) return '~' + s + 's';
+      const m = Math.floor(s / 60);
+      const rem = s % 60;
+      return rem > 0 ? '~' + m + 'm ' + rem + 's' : '~' + m + 'm';
+    },
+
     formatBytes(bytes) {
       if (bytes < 1024) return bytes + ' B';
       if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -647,6 +693,11 @@ function app() {
       this.alStatus = 'processing';
       this.alProgress = 0;
       this.alMessage = '';
+      this.alSteps = [];
+      this.alElapsed = 0;
+      this.alEta = null;
+      this.alSubProgress = null;
+      this.alSubLabel = '';
       const r = await fetch('/api/audiolab/process', { method: 'POST', body: formData });
       const data = await r.json();
       this.alJobId = data.job_id;

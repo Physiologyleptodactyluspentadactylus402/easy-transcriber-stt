@@ -631,12 +631,37 @@
                     class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-sm rounded-lg font-medium transition-colors">
               ✕ <span x-text="t('audiolab_cancel')"></span>
             </button>
-            <div x-show="alStatus==='processing'" class="flex-1">
-              <div class="bg-gray-800 rounded-full h-2 mb-1">
-                <div class="bg-indigo-500 h-2 rounded-full transition-all duration-300"
-                     :style="`width: ${Math.round(alProgress * 100)}%`"></div>
+            <div x-show="alStatus==='processing'" class="space-y-3 flex-1">
+              <!-- Stepper -->
+              <div class="space-y-0.5">
+                <template x-for="s in alSteps" :key="s.id">
+                  <div class="flex items-center gap-2 text-sm"
+                       :class="s.status === 'skipped' ? 'opacity-40 line-through' : ''">
+                    <span x-show="s.status==='completed'" class="text-green-400 w-4 text-center">✓</span>
+                    <span x-show="s.status==='active'" class="text-indigo-400 w-4 text-center animate-pulse">●</span>
+                    <span x-show="s.status==='pending'" class="text-gray-600 w-4 text-center">○</span>
+                    <span x-show="s.status==='skipped'" class="text-gray-600 w-4 text-center">–</span>
+                    <span :class="s.status==='active' ? 'text-indigo-300 font-medium' :
+                                  s.status==='completed' ? 'text-gray-300' : 'text-gray-500'"
+                          x-text="t(s.label_key)"></span>
+                    <span x-show="s.status==='completed' && s.elapsed != null"
+                          class="text-xs text-gray-600" x-text="Math.round(s.elapsed) + 's'"></span>
+                    <span x-show="s.status==='active' && alSubLabel"
+                          class="text-xs text-indigo-400" x-text="alSubLabel"></span>
+                  </div>
+                </template>
               </div>
-              <p class="text-xs text-gray-500" x-text="alMessage"></p>
+              <!-- Global bar + ETA -->
+              <div>
+                <div class="bg-gray-800 rounded-full h-2 mb-1">
+                  <div class="bg-indigo-500 h-2 rounded-full transition-all duration-300"
+                       :style="'width: ' + Math.round(alProgress * 100) + '%'"></div>
+                </div>
+                <div class="flex justify-between text-xs text-gray-500">
+                  <span x-text="Math.round(alProgress * 100) + '%'"></span>
+                  <span x-show="alEta != null" x-text="'⏱ ETA ' + _formatEta(alEta)"></span>
+                </div>
+              </div>
             </div>
           </div>
 
